@@ -1,5 +1,7 @@
 from fastapi import FastAPI
 from app.api import ingest, rag
+from app.core.logger import get_logger
+from app.services.utils import ensure_data_dirs
 
 app = FastAPI(
     title="AI Service Chatbot",
@@ -7,9 +9,11 @@ app = FastAPI(
     description="AI-powered RAG service for textbooks."
 )
 
-# Đăng ký router
 app.include_router(ingest.router, prefix="/admin", tags=["Ingestion"])
 app.include_router(rag.router, prefix="/rag", tags=["RAG Query"])
+
+logger = get_logger(__name__)
+ensure_data_dirs()
 
 @app.get("/", tags=["Health"])
 def health_check():
