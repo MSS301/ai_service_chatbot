@@ -15,6 +15,7 @@ AI-powered RAG (Retrieval-Augmented Generation) service for textbooks using Fast
 - Python 3.8+
 - pip
 - Tesseract OCR (for OCR functionality)
+- Poppler (for PDF processing)
 
 ## Installation
 
@@ -51,22 +52,72 @@ pip install -r app/requirements.txt
 
 **Windows:**
 
-- Download from: https://github.com/UB-Mannheim/tesseract/wiki
-- Add to PATH during installation
+1. Download Tesseract OCR from: https://github.com/UB-Mannheim/tesseract/wiki
+   - Choose the setup file, e.g., `Tesseract-OCR-Setup-5.3.3.20231005.exe`
+2. During installation:
+   - ✅ **Important:** Tick "Add Tesseract to the system PATH for current user"
+3. After installation, Tesseract will be at: `C:\Program Files\Tesseract-OCR\tesseract.exe`
+4. Verify installation:
+   ```powershell
+   tesseract --version
+   ```
+   You should see:
+   ```
+   tesseract v5.x.x
+    leptonica-...
+    libjpeg ...
+   ```
+5. Install Vietnamese language data:
+   - Download from: https://github.com/tesseract-ocr/tessdata/blob/main/vie.traineddata
+   - Or fast version: https://github.com/tesseract-ocr/tessdata_fast/blob/main/vie.traineddata
+   - Copy `vie.traineddata` to: `C:\Program Files\Tesseract-OCR\tessdata\`
+   - Verify: `tesseract -l vie --list-langs` (should include `vie`)
 
 **Linux:**
 
 ```bash
 sudo apt-get install tesseract-ocr
+sudo apt-get install libtesseract-dev
+sudo apt-get install tesseract-ocr-vie  # Vietnamese language pack
 ```
 
 **Mac:**
 
 ```bash
 brew install tesseract
+brew install tesseract-lang  # Includes Vietnamese
 ```
 
-### 5. Configure environment variables
+### 5. Install Poppler (for PDF processing)
+
+**Windows:**
+
+1. Download Poppler for Windows from: https://github.com/oschwartz10612/poppler-windows/releases/
+2. Extract to a folder, e.g., `C:\poppler`
+3. Add `C:\poppler\Library\bin` to your system PATH:
+   - Open Start Menu → Search "Edit environment variables"
+   - Environment Variables → System variables → Path → Edit → New
+   - Add: `C:\poppler\Library\bin`
+   - OK all dialogs
+4. Restart terminal and verify:
+   ```powershell
+   where pdfinfo
+   # Should show: C:\poppler\Library\bin\pdfinfo.exe
+   ```
+
+**Linux:**
+
+```bash
+sudo apt-get install poppler-utils
+```
+
+**Mac:**
+
+```bash
+brew install poppler
+```
+
+### 6. Configure environment variables
 
 Create a `.env` file in the `app` directory:
 
@@ -273,7 +324,31 @@ ai_service_chatbot/
 
 ### Issue: Tesseract not found
 
-**Solution:** Install Tesseract OCR and add it to your system PATH.
+**Error message:** `pytesseract.pytesseract.TesseractNotFoundError: tesseract is not installed or it's not in your PATH.`
+
+**Solution:**
+
+1. Install Tesseract OCR and **ensure** you tick "Add Tesseract to the system PATH" during installation
+2. Verify installation by running `tesseract --version` in a new terminal
+3. If not found, manually add `C:\Program Files\Tesseract-OCR` to your system PATH
+4. **Restart your terminal** after adding to PATH
+
+### Issue: Vietnamese language data not found
+
+**Error message:** `Error opening data file ...\tessdata\vie.traineddata` or `Failed loading language 'vie'`
+
+**Solution:**
+
+1. Download `vie.traineddata` from:
+   - Standard: https://github.com/tesseract-ocr/tessdata/blob/main/vie.traineddata
+   - Fast: https://github.com/tesseract-ocr/tessdata_fast/blob/main/vie.traineddata
+2. Copy to: `C:\Program Files\Tesseract-OCR\tessdata\`
+3. (Optional) Set environment variable `TESSDATA_PREFIX=C:\Program Files\Tesseract-OCR\tessdata`
+4. Verify: `tesseract -l vie --list-langs`
+
+### Issue: Poppler not found ("Is poppler installed and in PATH?")
+
+**Solution:** Install Poppler and add to PATH. See section 5 in Installation.
 
 ### Issue: Port 8000 already in use
 
@@ -292,7 +367,3 @@ uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload
 **Pham Dang Khoi**  
 Email: dangkhoipham80@gmail.com  
 Phone: +84 795 335 577
-
-$env:PYTHONPATH="D:\FPT\ai_service_chatbot"
-
-> > uvicorn app.main:app --reload

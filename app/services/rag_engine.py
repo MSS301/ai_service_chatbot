@@ -29,15 +29,18 @@ def _build_prompt(chunks, lesson, teacher_notes):
         for c in chunks[:5]
     ])
     prompt = f"""
-Bạn là giáo viên Toán giỏi. Dựa vào nội dung SGK sau:
+Bạn là giáo viên Toán. CHỈ sử dụng thông tin trong 'Nội dung SGK' bên dưới.
 
+Nếu không đủ thông tin, trả về đúng JSON:
+{{"sections": [], "note": "Không tìm thấy nội dung phù hợp trong SGK đã nạp."}}
+
+Nội dung SGK:
 {context}
 
-Hãy tạo outline bài giảng cho "{lesson['name']}" (Lớp {lesson['grade']}) với 5-10 mục.
-Yêu cầu:
-- Mỗi mục có: Tiêu đề + 3-5 bullet points
-- Thêm ví dụ thực tế theo gợi ý: "{teacher_notes}"
-- Format JSON:
+Yêu cầu: Tạo outline cho "{lesson['name']}" (Lớp {lesson['grade']}) với 5-10 mục.
+- Mỗi mục: Tiêu đề + 3-5 bullet + ví dụ gắn thực tế "{teacher_notes}"
+- KHÔNG thêm kiến thức không xuất hiện trong 'Nội dung SGK'.
+- Xuất **duy nhất** JSON object:
 {{
   "sections": [
     {{"title": "...", "bullets": ["..."], "examples": ["..."]}}
@@ -50,10 +53,10 @@ def _call_llm(prompt: str) -> dict:
     resp = client.chat.completions.create(
         model=CHAT_MODEL,
         messages=[
-            {"role": "system", "content": "Bạn là trợ lý giáo viên Toán"},
+            {"role": "system", "content": "Bạn là trợ lý chỉ trích dẫn nội dung đã cho, không bịa."},
             {"role": "user", "content": prompt}
         ],
-        temperature=0.7,
+        temperature=0,  # Giảm sáng tạo để bám chặt nội dung
         response_format={"type": "json_object"}
     )
     return json.loads(resp.choices[0].message.content)
@@ -64,10 +67,35 @@ def rag_query(lesson_id: str, teacher_notes: str, k: int = 8) -> Tuple[dict, Lis
     qvec = np.array(embed_query(q), dtype="float32").reshape(1, -1)
 
     index, meta = _load_index_meta()
+    num_chunks = len(meta.get("chunks", []))
+    
+    # Adjust k if metadata has fewer chunks than requested
+    if num_chunks == 0:
+        logger.error("No chunks found in metadata")
+        raise ValueError("No data available. Please ingest documents first.")
+    
+    k = min(k, num_chunks)
     distances, indices = index.search(qvec, k)
     idxs = indices[0].tolist()
     dists = distances[0].tolist()
-    chunks = [meta["chunks"][i] for i in idxs]
+    
+    # Filter out invalid indices that exceed metadata length
+    valid_pairs = [(idx, dist) for idx, dist in zip(idxs, dists) if idx < num_chunks]
+    valid_pairs.sort(key=lambda x: x[1])  # L2: nhỏ hơn = gần hơn
+    idxs = [idx for idx, _ in valid_pairs]
+    dists = [dist for _, dist in valid_pairs]
+    
+    # Ngưỡng "đủ gần": 0.30-0.35 cho ada-002 + L2
+    THRESH = 0.35
+    if not idxs or dists[0] > THRESH:
+        logger.info(f"No relevant content found (best distance: {dists[0] if idxs else 'N/A'})")
+        return {
+            "sections": [],
+            "note": "Không tìm thấy nội dung phù hợp trong SGK đã nạp.",
+            "sources": []
+        }, dists, idxs
+    
+    chunks = [meta["chunks"][i] for i in idxs[:5]]
 
     prompt = _build_prompt(chunks, lesson, teacher_notes)
     outline = _call_llm(prompt)
