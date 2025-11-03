@@ -106,27 +106,41 @@ chmod +x app/run.sh
 
 ### Method 2: Using uvicorn directly
 
-**Windows:**
+**Windows (from project root):**
 
 ```powershell
 # Activate virtual environment (if not already activated)
-app\.venv\Scripts\activate
-
-# Set PYTHONPATH to project root
-$env:PYTHONPATH = $PWD
+.venv\Scripts\activate
 
 # Run the server
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-**Linux/Mac:**
+**Windows (from app/ directory):**
+
+```powershell
+# Set PYTHONPATH to parent directory so 'app' module can be found
+$env:PYTHONPATH = ".."
+
+# Run the server
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+**Linux/Mac (from project root):**
 
 ```bash
 # Activate virtual environment (if not already activated)
-source app/.venv/bin/activate
+source .venv/bin/activate
 
-# Set PYTHONPATH to project root
-export PYTHONPATH=$(pwd)
+# Run the server
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+**Linux/Mac (from app/ directory):**
+
+```bash
+# Set PYTHONPATH to parent directory
+export PYTHONPATH=..
 
 # Run the server
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
@@ -135,6 +149,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ### Method 3: Using Python module
 
 ```bash
+# Make sure you're in the project root directory
 python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
@@ -155,7 +170,29 @@ Response:
 }
 ```
 
-### Ingestion Endpoint
+### Ingestion Endpoints
+
+**Get all ingested books:**
+
+```bash
+GET http://localhost:8000/admin/ingest
+```
+
+Response:
+
+```json
+{
+  "books": {
+    "Mathematics Grade 10": {
+      "grade": 10,
+      "chunks": 1250,
+      "pages": [1, 2, 3, ...]
+    }
+  }
+}
+```
+
+**Ingest a new book:**
 
 ```bash
 POST http://localhost:8000/admin/ingest
@@ -166,6 +203,12 @@ Content-Type: application/json
   "book_name": "Mathematics Grade 10",
   "grade": 10
 }
+```
+
+**Delete a book:**
+
+```bash
+DELETE http://localhost:8000/admin/ingest/Mathematics Grade 10
 ```
 
 ### RAG Query Endpoint
@@ -242,8 +285,14 @@ uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload
 
 ## License
 
-[Add your license here]
+© 2025 Pham Dang Khoi. All rights reserved.
 
 ## Contact
 
-[Add your contact information here]
+**Pham Dang Khoi**  
+Email: dangkhoipham80@gmail.com  
+Phone: +84 795 335 577
+
+$env:PYTHONPATH="D:\FPT\ai_service_chatbot"
+
+> > uvicorn app.main:app --reload

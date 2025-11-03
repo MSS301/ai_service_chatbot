@@ -8,6 +8,7 @@ pdf2image
 pytesseract
 pillow
 langchain
+langchain-text-splitters
 faiss-cpu
 numpy
 tqdm

@@ -1,5 +1,8 @@
 from typing import List, Dict
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+try:
+    from langchain_text_splitters import RecursiveCharacterTextSplitter
+except ImportError:
+    from langchain.text_splitter import RecursiveCharacterTextSplitter
 
 def chunk_pages(pages: List[Dict], book_name: str, grade: int,
                 size: int = 800, overlap: int = 100) -> List[Dict]:
