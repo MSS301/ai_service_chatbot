@@ -91,3 +91,18 @@ desktop.ini
 *.swp
 *.swo
 *~
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+
+# OS
+.DS_Store
+
+# Data
+app/data/faiss/index.faiss
+app/data/faiss/metadata.json
+app/data/cache/*.json
