@@ -13,7 +13,7 @@ export PYTHONPATH=$(pwd)
 if [ -d "app/.venv" ]; then 
     source app/.venv/bin/activate
 elif [ -d ".venv" ]; then 
-    source .venv/bin/activate
+source .venv/bin/activate
 fi
 
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload

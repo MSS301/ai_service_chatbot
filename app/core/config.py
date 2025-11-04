@@ -1,7 +1,11 @@
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv()
+# Always load the app/.env regardless of current working directory
+APP_DIR = Path(__file__).resolve().parents[1]
+ENV_PATH = APP_DIR / ".env"
+load_dotenv(dotenv_path=ENV_PATH)
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 EMBED_MODEL = os.getenv("EMBED_MODEL", "text-embedding-ada-002")

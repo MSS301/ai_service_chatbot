@@ -1,7 +1,7 @@
 from fastapi import FastAPI
-from app.api import ingest, rag
-from app.core.logger import get_logger
-from app.services.utils import ensure_data_dirs
+from .api import ingest, rag
+from .core.logger import get_logger
+from .services.utils import ensure_data_dirs
 
 app = FastAPI(
     title="AI Service Chatbot",

@@ -5,10 +5,13 @@ AI-powered RAG (Retrieval-Augmented Generation) service for textbooks using Fast
 ## Features
 
 - 📚 PDF document ingestion with text extraction and chunking
+- 🎯 Automatic chapter and lesson detection from textbook structure
 - 🔍 Vector-based semantic search using FAISS
-- 🤖 RAG (Retrieval-Augmented Generation) query endpoint
+- 🤖 RAG (Retrieval-Augmented Generation) query endpoint with strict grounding
+- 📊 Confidence threshold filtering to prevent hallucinations
 - 🚀 FastAPI REST API
 - 📊 Health check endpoint
+- 🗂️ Book management: list, ingest, and delete documents
 
 ## Prerequisites
 
@@ -238,6 +241,36 @@ Response:
       "grade": 10,
       "chunks": 1250,
       "pages": [1, 2, 3, ...]
+    }
+  }
+}
+```
+
+**Get book structure (chapters/lessons):**
+
+```bash
+GET http://localhost:8000/admin/ingest/Mathematics Grade 10/structure
+```
+
+Response:
+
+```json
+{
+  "book_name": "Mathematics Grade 10",
+  "structure": {
+    "Hàm số": {
+      "lessons": {
+        "Hàm số bậc nhất": {
+          "pages": [5, 6, 7],
+          "chunks": 15
+        },
+        "Hàm số bậc hai": {
+          "pages": [8, 9, 10],
+          "chunks": 18
+        }
+      },
+      "total_chunks": 33,
+      "pages": [5, 6, 7, 8, 9, 10]
     }
   }
 }
