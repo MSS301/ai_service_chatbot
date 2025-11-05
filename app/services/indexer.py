@@ -32,6 +32,13 @@ def _ensure_meta() -> Dict:
 def _cache_key(book_name: str, grade: int, pdf_bytes: bytes) -> str:
     return hashlib.md5((book_name+str(grade)+str(len(pdf_bytes))).encode()).hexdigest()
 
+def _compute_book_id(book_name: str, grade: int) -> str:
+    """
+    Tạo book_id ổn định từ tên sách + grade (không phụ thuộc đường dẫn PDF).
+    """
+    base = f"{book_name.strip().lower()}::{grade}"
+    return hashlib.md5(base.encode("utf-8")).hexdigest()
+
 def _build_page_assignments(structured: Dict) -> Dict[int, Dict[str, str]]:
     """
     Tạo mapping page -> {chapter, lesson} dựa vào TOC đã chuẩn hoá.
@@ -273,6 +280,7 @@ def ingest_pdf(
                     pages_dict["pages"] = sorted(list(set(pages_dict["pages"] + [c.get("page")])))
 
     books_meta[book_name] = {
+        "id": _compute_book_id(book_name, grade),
         "grade": grade,
         "structure": book_structure
     }

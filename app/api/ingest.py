@@ -28,6 +28,7 @@ def get_all_ingested_books():
         book = chunk["book"]
         if book not in books:
             books[book] = {
+                "id": metadata.get("books", {}).get(book, {}).get("id"),  # có thể None nếu sách cũ
                 "grade": chunk.get("grade"),
                 "chunks": 0,
                 "pages": set()
@@ -40,6 +41,52 @@ def get_all_ingested_books():
         b["pages"] = sorted(b["pages"])
     
     return {"books": books}
+
+@router.get("/ingest/id/{book_id}")
+def get_book_by_id(book_id: str):
+    """
+    🔎 Tìm sách theo book_id
+    """
+    if not os.path.exists(METADATA_PATH):
+        raise HTTPException(status_code=404, detail="No books ingested yet")
+
+    with open(METADATA_PATH, "r", encoding="utf-8") as f:
+        metadata = json.load(f)
+
+    books_meta = metadata.get("books", {})
+    match = None
+    for name, info in books_meta.items():
+        if info.get("id") == book_id:
+            match = {"book_name": name, "grade": info.get("grade"), "structure": info.get("structure", {})}
+            break
+
+    if not match:
+        raise HTTPException(status_code=404, detail=f"Book id '{book_id}' not found")
+
+    return match
+
+@router.get("/ingest/id/{book_id}/structure")
+def get_book_structure_by_id(book_id: str):
+    """
+    📖 Lấy cấu trúc chương/bài chi tiết bằng book_id
+    """
+    if not os.path.exists(METADATA_PATH):
+        raise HTTPException(status_code=404, detail="No books ingested yet")
+
+    with open(METADATA_PATH, "r", encoding="utf-8") as f:
+        metadata = json.load(f)
+
+    books_meta = metadata.get("books", {})
+    for name, info in books_meta.items():
+        if info.get("id") == book_id:
+            return {
+                "book_id": book_id,
+                "book_name": name,
+                "grade": info.get("grade"),
+                "structure": info.get("structure", {})
+            }
+
+    raise HTTPException(status_code=404, detail=f"Book id '{book_id}' not found")
 
 @router.get("/ingest/{book_name}/structure")
 def get_book_structure(book_name: str):
