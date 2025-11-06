@@ -1,44 +1,50 @@
 from fastapi import APIRouter, HTTPException
 from app.models.ingest_model import IngestRequest, IngestResponse
-from app.services.indexer import ingest_pdf
-import json
+from app.services.indexer import ingest_pdf, _compute_book_id
+from app.repositories.book_repository import BookRepository
+from app.repositories.chunk_repository import ChunkRepository
+from app.repositories.chapter_repository import ChapterRepository
+from app.repositories.lesson_repository import LessonRepository
 import os
-import shutil
+
+# Optional import for migration (only if needed)
+try:
+    from app.scripts.migrate_to_mongodb import migrate_metadata_to_mongodb
+    MIGRATION_AVAILABLE = True
+except ImportError:
+    MIGRATION_AVAILABLE = False
+    migrate_metadata_to_mongodb = None
 
 router = APIRouter()
 
-FAISS_DIR = "app/data/faiss"
 CACHE_DIR = "app/data/cache"
-METADATA_PATH = os.path.join(FAISS_DIR, "metadata.json")
 
 @router.get("/ingest")
 def get_all_ingested_books():
     """
-    📘 Lấy danh sách tất cả sách đã ingest (từ metadata.json)
+    📘 Lấy danh sách tất cả sách đã ingest (từ MongoDB)
     """
-    if not os.path.exists(METADATA_PATH):
-        return {"books": []}
+    book_repo = BookRepository()
+    chunk_repo = ChunkRepository()
     
-    with open(METADATA_PATH, "r", encoding="utf-8") as f:
-        metadata = json.load(f)
-    
-    # Gom nhóm theo tên sách
+    all_books = book_repo.get_all_books()
     books = {}
-    for chunk in metadata.get("chunks", []):
-        book = chunk["book"]
-        if book not in books:
-            books[book] = {
-                "id": metadata.get("books", {}).get(book, {}).get("id"),  # có thể None nếu sách cũ
-                "grade": chunk.get("grade"),
-                "chunks": 0,
-                "pages": set()
-            }
-        books[book]["chunks"] += 1
-        books[book]["pages"].add(chunk["page"])
     
-    # Chuyển set → list
-    for b in books.values():
-        b["pages"] = sorted(b["pages"])
+    for book in all_books:
+        book_id = book.get("book_id")
+        book_name = book.get("book_name")
+        grade = book.get("grade")
+        
+        # Count chunks and pages
+        chunks = chunk_repo.get_chunks_by_book(book_id)
+        pages = sorted(set(c.get("page") for c in chunks if c.get("page")))
+        
+        books[book_name] = {
+            "id": book_id,
+            "grade": grade,
+            "chunks": len(chunks),
+            "pages": pages
+        }
     
     return {"books": books}
 
@@ -47,109 +53,53 @@ def get_book_by_id(book_id: str):
     """
     🔎 Tìm sách theo book_id
     """
-    if not os.path.exists(METADATA_PATH):
-        raise HTTPException(status_code=404, detail="No books ingested yet")
-
-    with open(METADATA_PATH, "r", encoding="utf-8") as f:
-        metadata = json.load(f)
-
-    books_meta = metadata.get("books", {})
-    match = None
-    for name, info in books_meta.items():
-        if info.get("id") == book_id:
-            match = {"book_name": name, "grade": info.get("grade"), "structure": info.get("structure", {})}
-            break
-
-    if not match:
+    book_repo = BookRepository()
+    book = book_repo.get_book_by_id(book_id)
+    
+    if not book:
         raise HTTPException(status_code=404, detail=f"Book id '{book_id}' not found")
-
-    return match
+    
+    return {
+        "book_id": book.get("book_id"),
+        "book_name": book.get("book_name"),
+        "grade": book.get("grade"),
+        "structure": book.get("structure", {})
+    }
 
 @router.get("/ingest/id/{book_id}/structure")
 def get_book_structure_by_id(book_id: str):
     """
     📖 Lấy cấu trúc chương/bài chi tiết bằng book_id
     """
-    if not os.path.exists(METADATA_PATH):
-        raise HTTPException(status_code=404, detail="No books ingested yet")
-
-    with open(METADATA_PATH, "r", encoding="utf-8") as f:
-        metadata = json.load(f)
-
-    books_meta = metadata.get("books", {})
-    for name, info in books_meta.items():
-        if info.get("id") == book_id:
-            return {
-                "book_id": book_id,
-                "book_name": name,
-                "grade": info.get("grade"),
-                "structure": info.get("structure", {})
-            }
-
-    raise HTTPException(status_code=404, detail=f"Book id '{book_id}' not found")
+    book_repo = BookRepository()
+    book = book_repo.get_book_by_id(book_id)
+    
+    if not book:
+        raise HTTPException(status_code=404, detail=f"Book id '{book_id}' not found")
+    
+    return {
+        "book_id": book.get("book_id"),
+        "book_name": book.get("book_name"),
+        "grade": book.get("grade"),
+        "structure": book.get("structure", {})
+    }
 
 @router.get("/ingest/{book_name}/structure")
 def get_book_structure(book_name: str):
     """
     📖 Lấy cấu trúc chương/bài chi tiết của một sách cụ thể
     """
-    if not os.path.exists(METADATA_PATH):
-        raise HTTPException(status_code=404, detail="No books ingested yet")
+    book_repo = BookRepository()
+    book = book_repo.get_book_by_name(book_name)
     
-    with open(METADATA_PATH, "r", encoding="utf-8") as f:
-        metadata = json.load(f)
-    
-    # Nếu đã có structure được lưu khi ingest, dùng trực tiếp
-    if metadata.get("books", {}).get(book_name):
-        saved = metadata["books"][book_name]
-        return {
-            "book_name": book_name,
-            "grade": saved.get("grade"),
-            "structure": saved.get("structure", {})
-        }
-
-    # Lọc chunks của sách cụ thể (fallback)
-    book_chunks = [c for c in metadata.get("chunks", []) if c.get("book") == book_name]
-    
-    if not book_chunks:
+    if not book:
         raise HTTPException(status_code=404, detail=f"Book '{book_name}' not found")
     
-    # Gom nhóm theo chương và bài
-    structure = {}
-    for chunk in book_chunks:
-        chapter = chunk.get("chapter", "")
-        lesson = chunk.get("lesson", "")
-        
-        if chapter:
-            if chapter not in structure:
-                structure[chapter] = {
-                    "lessons": {},
-                    "total_chunks": 0,
-                    "pages": set()
-                }
-            
-            if lesson and lesson not in structure[chapter]["lessons"]:
-                structure[chapter]["lessons"][lesson] = {
-                    "pages": set(),
-                    "chunks": 0
-                }
-            
-            if lesson:
-                structure[chapter]["lessons"][lesson]["pages"].add(chunk["page"])
-                structure[chapter]["lessons"][lesson]["chunks"] += 1
-            
-            structure[chapter]["total_chunks"] += 1
-            structure[chapter]["pages"].add(chunk["page"])
-    
-    # Convert sets to sorted lists
-    for chapter_data in structure.values():
-        chapter_data["pages"] = sorted(chapter_data["pages"])
-        for lesson_data in chapter_data["lessons"].values():
-            lesson_data["pages"] = sorted(lesson_data["pages"])
-    
     return {
-        "book_name": book_name,
-        "structure": structure
+        "book_id": book.get("book_id"),
+        "book_name": book.get("book_name"),
+        "grade": book.get("grade"),
+        "structure": book.get("structure", {})
     }
 
 @router.post("/ingest", response_model=IngestResponse)
@@ -163,31 +113,88 @@ def ingest_book(req: IngestRequest):
     )
     return result
 
+@router.post("/ingest/migrate")
+def migrate_books_to_mongodb():
+    """
+    🔄 Migrate dữ liệu từ metadata.json sang MongoDB (nếu có)
+    Chỉ migrate những sách/chunks chưa có trong MongoDB
+    """
+    if not MIGRATION_AVAILABLE:
+        raise HTTPException(
+            status_code=501, 
+            detail="Migration script not available. All data is now stored in MongoDB directly."
+        )
+    
+    try:
+        migrate_metadata_to_mongodb()
+        return {
+            "status": "success",
+            "message": "Migration completed. Check logs for details."
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Migration failed: {str(e)}")
+
+@router.get("/ingest/collections/status")
+def get_collections_status():
+    """
+    📊 Kiểm tra trạng thái collections trong MongoDB
+    """
+    from app.core.database import get_database
+    
+    db = get_database()
+    collections = db.list_collection_names()
+    
+    status = {
+        "database": db.name,
+        "collections": {}
+    }
+    
+    for coll_name in ["books", "chunks", "chapters", "lessons"]:
+        if coll_name in collections:
+            coll = db[coll_name]
+            count = coll.count_documents({})
+            indexes = list(coll.list_indexes())
+            status["collections"][coll_name] = {
+                "exists": True,
+                "document_count": count,
+                "indexes": [idx.get("name") for idx in indexes]
+            }
+        else:
+            status["collections"][coll_name] = {
+                "exists": False,
+                "document_count": 0,
+                "indexes": []
+            }
+    
+    return status
+
 @router.delete("/ingest/{book_name}")
 def delete_ingested_book(book_name: str):
     """
-    ❌ Xóa toàn bộ dữ liệu (metadata + cache) của 1 sách cụ thể
+    ❌ Xóa toàn bộ dữ liệu (MongoDB + cache) của 1 sách cụ thể
     """
-    if not os.path.exists(METADATA_PATH):
-        raise HTTPException(status_code=404, detail="metadata.json not found")
+    book_repo = BookRepository()
+    chunk_repo = ChunkRepository()
+    chapter_repo = ChapterRepository()
+    lesson_repo = LessonRepository()
     
-    with open(METADATA_PATH, "r", encoding="utf-8") as f:
-        metadata = json.load(f)
+    book = book_repo.get_book_by_name(book_name)
+    if not book:
+        raise HTTPException(status_code=404, detail=f"Book '{book_name}' not found")
     
-    # Lọc ra các chunk KHÔNG thuộc book_name
-    old_count = len(metadata.get("chunks", []))
-    metadata["chunks"] = [
-        c for c in metadata.get("chunks", []) if c["book"] != book_name
-    ]
-    new_count = len(metadata["chunks"])
-
-    # Xóa cache cấu trúc đã lưu trong metadata["books"]
-    if "books" in metadata and book_name in metadata["books"]:
-        del metadata["books"][book_name]
+    book_id = book.get("book_id")
     
-    # Ghi lại metadata.json
-    with open(METADATA_PATH, "w", encoding="utf-8") as f:
-        json.dump(metadata, f, ensure_ascii=False, indent=2)
+    # Delete chunks
+    deleted_chunks = chunk_repo.delete_chunks_by_book(book_id)
+    
+    # Delete lessons
+    deleted_lessons = lesson_repo.delete_lessons_by_book(book_id)
+    
+    # Delete chapters
+    deleted_chapters = chapter_repo.delete_chapters_by_book(book_id)
+    
+    # Delete book metadata
+    book_repo.delete_book_by_name(book_name)
     
     # Xóa cache (nếu có)
     # Yêu cầu: xóa hết cache để lần ingest sau luôn mới
@@ -201,5 +208,8 @@ def delete_ingested_book(book_name: str):
     return {
         "status": "deleted",
         "book_name": book_name,
-        "removed_chunks": old_count - new_count
+        "book_id": book_id,
+        "removed_chunks": deleted_chunks,
+        "removed_chapters": deleted_chapters,
+        "removed_lessons": deleted_lessons
     }

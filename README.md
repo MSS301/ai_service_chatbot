@@ -120,24 +120,72 @@ sudo apt-get install poppler-utils
 brew install poppler
 ```
 
-### 6. Configure environment variables
+### 6. Install MongoDB
+
+**Windows:**
+
+1. Download MongoDB Community Server from: https://www.mongodb.com/try/download/community
+2. Install with default settings (includes MongoDB Compass)
+3. MongoDB will run as a Windows service automatically
+
+**Linux:**
+
+```bash
+sudo apt-get install mongodb
+sudo systemctl start mongodb
+```
+
+**Mac:**
+
+```bash
+brew install mongodb-community
+brew services start mongodb-community
+```
+
+Verify MongoDB is running:
+
+```bash
+# Windows
+mongod --version
+
+# Linux/Mac
+mongo --version
+```
+
+### 7. Configure environment variables
 
 Create a `.env` file in the `app` directory:
 
 ```bash
-# OpenAI Configuration (if using OpenAI embeddings)
-OPENAI_API_KEY=your_openai_api_key_here
-
-# Other optional configurations
-LOG_LEVEL=INFO
+# Copy example file
+cp app/env.example app/.env
 ```
 
-Example:
+Then edit `app/.env` and configure:
 
 ```bash
-cp app/.env.example app/.env
-# Then edit app/.env and add your OpenAI API key
+# OpenAI Configuration
+OPENAI_API_KEY=sk-your_openai_api_key_here
+EMBED_MODEL=text-embedding-ada-002
+CHAT_MODEL=gpt-4-turbo
+
+# MongoDB Configuration
+MONGODB_URI=mongodb://localhost:27017/
+MONGODB_DB_NAME=ai_chatbot_mss301
+
+# Data Directories
+DATA_DIR=app/data/faiss
+CACHE_DIR=app/data/cache
+
+# OCR Configuration
+FORCE_OCR=0
 ```
+
+**Important:**
+
+- Replace `sk-your_openai_api_key_here` with your actual OpenAI API key
+- Database name is set to `ai_chatbot_mss301` by default
+- MongoDB URI should point to your MongoDB instance
 
 ## Running the Application
 

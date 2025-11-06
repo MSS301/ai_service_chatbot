@@ -1,9 +1,12 @@
 from pydantic import BaseModel
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 class RAGRequest(BaseModel):
+    grade: int
+    book_id: str
+    chapter_id: str
     lesson_id: str
-    teacher_notes: str
+    content: str  # teacher_notes/content
     k: int = 8
 
 class RAGResponse(BaseModel):

@@ -14,3 +14,4 @@ numpy
 tqdm
 requests
 sentence-transformers
+pymongo

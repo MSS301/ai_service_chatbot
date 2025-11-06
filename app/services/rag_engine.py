@@ -4,9 +4,13 @@ from typing import Tuple, List
 import numpy as np, faiss
 from openai import OpenAI
 from dotenv import load_dotenv
-from app.core.config import INDEX_PATH, META_PATH, CHAT_MODEL
+from app.core.config import INDEX_PATH, CHAT_MODEL
 from app.core.logger import get_logger
 from app.services.embedder import embed_query
+from app.repositories.chunk_repository import ChunkRepository
+from app.repositories.book_repository import BookRepository
+from app.repositories.chapter_repository import ChapterRepository
+from app.repositories.lesson_repository import LessonRepository
 
 logger = get_logger(__name__)
 
@@ -37,11 +41,14 @@ def _get_lesson(lesson_id: str):
         "chapter_full": ""
     })
 
-def _load_index_meta():
+def _load_index_chunks():
+    """Load FAISS index and get all chunks from MongoDB"""
     index = faiss.read_index(INDEX_PATH)
-    import json as _json
-    meta = _json.load(open(META_PATH, "r", encoding="utf-8"))
-    return index, meta
+    chunk_repo = ChunkRepository()
+    # Get all chunks (could be optimized with pagination if needed)
+    all_chunks = chunk_repo.collection.find({})
+    chunks_list = list(all_chunks)
+    return index, chunks_list
 
 def _build_prompt(chunks, lesson, teacher_notes):
     """
@@ -200,29 +207,51 @@ def _filter_chunks_by_metadata(chunks: List, lesson: dict) -> List:
     logger.warning(f"No chunks match grade={target_grade}, using all {len(chunks)} chunks")
     return chunks
 
-def rag_query(lesson_id: str, teacher_notes: str, k: int = 8) -> Tuple[dict, List[float], List[int]]:
+def rag_query(grade: int, book_id: str, chapter_id: str, lesson_id: str, content: str, k: int = 8) -> Tuple[dict, List[float], List[int]]:
     """
-    RAG Query với filtering theo grade + chapter
+    RAG Query với filtering theo book_id, chapter_id, lesson_id
     """
-    lesson = _get_lesson(lesson_id)
+    # Get lesson info from MongoDB
+    lesson_repo = LessonRepository()
+    lesson = lesson_repo.get_lesson_by_id(lesson_id)
     
-    # Build query với chapter info để improve accuracy
+    if not lesson:
+        return {
+            "sections": [],
+            "note": f"Lesson '{lesson_id}' not found",
+            "sources": []
+        }, [], []
+    
+    # Get chapter info
+    chapter_repo = ChapterRepository()
+    chapter = chapter_repo.get_chapter_by_id(chapter_id)
+    
+    # Get book info (for validation)
+    book_repo = BookRepository()
+    book = book_repo.get_book_by_id(book_id)
+    if not book:
+        return {
+            "sections": [],
+            "note": f"Book '{book_id}' not found",
+            "sources": []
+        }, [], []
+    
+    # Build query string
     query_parts = []
-    if lesson.get("chapter"):
-        query_parts.append(lesson["chapter"])
-    query_parts.append(lesson["name"])
-    if teacher_notes:
-        query_parts.append(teacher_notes)
+    if chapter:
+        query_parts.append(chapter.get("title", ""))
+    query_parts.append(lesson.get("title", ""))
+    if content:
+        query_parts.append(content)
     
     query_string = " ".join(query_parts).strip()
-    logger.info(f"RAG Query: '{query_string}'")
+    logger.info(f"RAG Query: book_id={book_id}, chapter_id={chapter_id}, lesson_id={lesson_id}, query='{query_string}'")
     
     # Embed query
     qvec = np.array(embed_query(query_string), dtype="float32").reshape(1, -1)
     
-    # Load index + metadata
-    index, meta = _load_index_meta()
-    all_chunks = meta.get("chunks", [])
+    # Load index + chunks from MongoDB
+    index, all_chunks = _load_index_chunks()
     num_chunks = len(all_chunks)
     
     if num_chunks == 0:
@@ -258,11 +287,34 @@ def rag_query(lesson_id: str, teacher_notes: str, k: int = 8) -> Tuple[dict, Lis
     idxs = [idx for idx, _ in valid_pairs]
     dists = [dist for _, dist in valid_pairs]
     
-    # Get chunks
-    retrieved_chunks = [all_chunks[i] for i in idxs]
+    # Get chunks by embedding indices
+    chunk_repo = ChunkRepository()
+    retrieved_chunks = chunk_repo.get_chunks_by_indices(idxs)
     
-    # Filter by grade + chapter
-    filtered_chunks = _filter_chunks_by_metadata(retrieved_chunks, lesson)
+    # Filter by book_id, chapter_id, lesson_id
+    filtered_chunks = [
+        c for c in retrieved_chunks
+        if c.get("book_id") == book_id 
+        and c.get("chapter_id") == chapter_id
+        and c.get("lesson_id") == lesson_id
+    ]
+    
+    # If no exact match, try chapter_id only
+    if not filtered_chunks:
+        filtered_chunks = [
+            c for c in retrieved_chunks
+            if c.get("book_id") == book_id 
+            and c.get("chapter_id") == chapter_id
+        ]
+        logger.info(f"Filtered to {len(filtered_chunks)} chunks (by chapter_id only)")
+    
+    # If still no match, try book_id only
+    if not filtered_chunks:
+        filtered_chunks = [
+            c for c in retrieved_chunks
+            if c.get("book_id") == book_id
+        ]
+        logger.info(f"Filtered to {len(filtered_chunks)} chunks (by book_id only)")
     
     # Check relevance threshold (L2 distance for ada-002: <0.35 = good)
     RELEVANCE_THRESHOLD = 0.35
@@ -275,20 +327,25 @@ def rag_query(lesson_id: str, teacher_notes: str, k: int = 8) -> Tuple[dict, Lis
         }, dists[:len(filtered_chunks)], idxs[:len(filtered_chunks)]
     
     # Build prompt + Call LLM
-    prompt = _build_prompt(filtered_chunks, lesson, teacher_notes)
+    lesson_info = {
+        "name": lesson.get("title", ""),
+        "grade": grade,
+        "chapter": chapter.get("title", "") if chapter else "",
+        "chapter_full": chapter.get("title", "") if chapter else ""
+    }
+    prompt = _build_prompt(filtered_chunks, lesson_info, content)
     outline = _call_llm(prompt)
     
     # Add source citations
     outline["sources"] = []
     for i, chunk in enumerate(filtered_chunks[:3]):  # Top 3 sources
-        source_idx = all_chunks.index(chunk)
-        source_dist = dists[idxs.index(source_idx)] if source_idx in idxs else 1.0
+        source_dist = dists[i] if i < len(dists) else 1.0
         
         outline["sources"].append({
-            "book": chunk["book"],
+            "book": chunk.get("book", "N/A"),
             "chapter": chunk.get("chapter", "N/A"),
             "lesson": chunk.get("lesson", "N/A"),
-            "pages": [chunk["page"]],
+            "pages": [chunk.get("page", 0)],
             "confidence": round(max(0, 1 - source_dist), 4)  # Convert L2 to 0-1 score
         })
     

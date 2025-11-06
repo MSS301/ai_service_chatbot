@@ -15,6 +15,11 @@ DATA_DIR = os.getenv("DATA_DIR", "app/data/faiss")
 CACHE_DIR = os.getenv("CACHE_DIR", "app/data/cache")
 FORCE_OCR = os.getenv("FORCE_OCR", "0") == "1"
 
-# Paths
+# MongoDB Configuration
+MONGODB_URI = os.getenv("MONGODB_URI", "mongodb://localhost:27017/")
+MONGODB_DB_NAME = os.getenv("MONGODB_DB_NAME", "ai_chatbot_mss301")
+
+# Paths (still used for FAISS index files)
 INDEX_PATH = os.path.join(DATA_DIR, "index.faiss")
-META_PATH = os.path.join(DATA_DIR, "metadata.json")
+# META_PATH deprecated - using MongoDB instead
+# META_PATH = os.path.join(DATA_DIR, "metadata.json")  # Only for migration script

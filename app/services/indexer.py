@@ -1,13 +1,17 @@
 import os, json, time, hashlib, requests
 from typing import Dict, List, Optional
 import numpy as np, faiss
-from app.core.config import INDEX_PATH, META_PATH, DATA_DIR, CACHE_DIR
+from app.core.config import INDEX_PATH, DATA_DIR, CACHE_DIR
 from app.core.logger import get_logger
 from app.services.parser import parse_pdf_bytes, extract_toc_candidates
 from openai import OpenAI
 from app.core.config import OPENAI_API_KEY, CHAT_MODEL
 from app.services.chunker import chunk_pages
 from app.services.embedder import embed_texts
+from app.repositories.book_repository import BookRepository
+from app.repositories.chunk_repository import ChunkRepository
+from app.repositories.chapter_repository import ChapterRepository
+from app.repositories.lesson_repository import LessonRepository
 
 logger = get_logger(__name__)
 
@@ -19,15 +23,7 @@ def _ensure_index(dim: int) -> faiss.IndexFlatL2:
     faiss.write_index(index, INDEX_PATH)
     return index
 
-def _ensure_meta() -> Dict:
-    if os.path.exists(META_PATH):
-        with open(META_PATH, "r", encoding="utf-8") as f:
-            return json.load(f)
-    os.makedirs(DATA_DIR, exist_ok=True)
-    meta = {"chunks": []}
-    with open(META_PATH, "w", encoding="utf-8") as f:
-        json.dump(meta, f, ensure_ascii=False, indent=2)
-    return meta
+# Removed _ensure_meta() - now using MongoDB repositories
 
 def _cache_key(book_name: str, grade: int, pdf_bytes: bytes) -> str:
     return hashlib.md5((book_name+str(grade)+str(len(pdf_bytes))).encode()).hexdigest()
@@ -37,6 +33,16 @@ def _compute_book_id(book_name: str, grade: int) -> str:
     Tạo book_id ổn định từ tên sách + grade (không phụ thuộc đường dẫn PDF).
     """
     base = f"{book_name.strip().lower()}::{grade}"
+    return hashlib.md5(base.encode("utf-8")).hexdigest()
+
+def _compute_chapter_id(book_id: str, chapter_title: str) -> str:
+    """Tạo chapter_id từ book_id + chapter_title"""
+    base = f"{book_id}::{chapter_title.strip().lower()}"
+    return hashlib.md5(base.encode("utf-8")).hexdigest()
+
+def _compute_lesson_id(chapter_id: str, lesson_title: str) -> str:
+    """Tạo lesson_id từ chapter_id + lesson_title"""
+    base = f"{chapter_id}::{lesson_title.strip().lower()}"
     return hashlib.md5(base.encode("utf-8")).hexdigest()
 
 def _build_page_assignments(structured: Dict) -> Dict[int, Dict[str, str]]:
@@ -52,7 +58,6 @@ def _build_page_assignments(structured: Dict) -> Dict[int, Dict[str, str]]:
     chapter_order: List[tuple] = []
     chapter_lessons_pages: Dict[str, List[tuple]] = {}
     for ch, info in structured.items():
-        lessons = info.get("lessons", [])
         lesson_pages = info.get("lesson_pages", {})
         pairs = [(lp, lt) for lt, lp in lesson_pages.items() if isinstance(lp, int)]
         pairs.sort(key=lambda x: x[0])
@@ -227,24 +232,53 @@ def ingest_pdf(
                 "lesson_pages": {l["title"]: l["page"] for l in info.get("lessons", []) if l.get("page")}
             }
 
+    # Compute book_id
+    book_id = _compute_book_id(book_name, grade)
+    
+    # Initialize repositories
+    book_repo = BookRepository()
+    chunk_repo = ChunkRepository()
+    chapter_repo = ChapterRepository()
+    lesson_repo = LessonRepository()
+    
+    # Create indexes if not exist
+    book_repo.create_indexes()
+    chunk_repo.create_indexes()
+    chapter_repo.create_indexes()
+    lesson_repo.create_indexes()
+    
+    # Delete existing data for this book if re-ingesting
+    chunk_repo.delete_chunks_by_book(book_id)
+    chapter_repo.delete_chapters_by_book(book_id)
+    lesson_repo.delete_lessons_by_book(book_id)
+    
     chunks = chunk_pages(pages, book_name, grade, size=800, overlap=100)
     texts = [c["text"] for c in chunks]
     vectors = embed_texts(texts)
     dim = len(vectors[0])
 
+    # Get max embedding_index from existing chunks (if any)
+    # For now, we'll use a simple approach: get max from all chunks
+    max_index = 0
+    try:
+        # Get all chunks to find max index (could be optimized with aggregation)
+        all_chunks = chunk_repo.collection.find({}, {"embedding_index": 1}).sort("embedding_index", -1).limit(1)
+        if all_chunks:
+            max_index = all_chunks[0].get("embedding_index", 0) + 1
+    except Exception:
+        pass
+    
     index = _ensure_index(dim)
     index.add(np.array(vectors, dtype="float32"))
     faiss.write_index(index, INDEX_PATH)
 
-    meta = _ensure_meta()
-    # Lưu cấu trúc vào metadata.books[book_name]
-    books_meta = meta.get("books", {})
     # Trang theo chương từ pages
     chapter_pages: Dict[str, List[int]] = {}
     for p in pages:
         ch = p.get("chapter")
         if ch:
             chapter_pages.setdefault(ch, set()).add(p.get("page_num"))
+    
     # Hợp nhất structured với pages (thêm pages, chunk counts sẽ điền sau)
     book_structure: Dict[str, Dict] = {}
     for ch, info in structured.items():
@@ -253,10 +287,22 @@ def ingest_pdf(
             "total_chunks": 0,
             "pages": sorted(list(chapter_pages.get(ch, set())))
         }
-    start = len(meta["chunks"])
+    
     # Dùng mapping page->(chapter/lesson) từ TOC để override detect từ nội dung
     page_assignments = _build_page_assignments(structured) if structured else {}
 
+    # Create mapping chapter_title -> chapter_id, lesson_title -> lesson_id
+    chapter_id_map = {}
+    lesson_id_map = {}
+    for ch_title, ch_info in structured.items():
+        chapter_id = _compute_chapter_id(book_id, ch_title)
+        chapter_id_map[ch_title] = chapter_id
+        for le_title in ch_info.get("lessons", {}).keys():
+            lesson_id = _compute_lesson_id(chapter_id, le_title)
+            lesson_id_map[le_title] = lesson_id
+    
+    # Prepare chunks for insertion
+    chunks_to_insert = []
     for i, c in enumerate(chunks):
         # Override chapter/lesson theo TOC nếu có
         pnum = c.get("page")
@@ -264,8 +310,18 @@ def ingest_pdf(
             assign = page_assignments[pnum]
             c["chapter"] = assign.get("chapter") or c.get("chapter")
             c["lesson"] = assign.get("lesson") or c.get("lesson")
-        c["embedding_index"] = start + i
-        meta["chunks"].append(c)
+        
+        # Add chapter_id and lesson_id
+        ch_title = c.get("chapter")
+        le_title = c.get("lesson")
+        if ch_title and ch_title in chapter_id_map:
+            c["chapter_id"] = chapter_id_map[ch_title]
+        if le_title and le_title in lesson_id_map:
+            c["lesson_id"] = lesson_id_map[le_title]
+        
+        c["embedding_index"] = max_index + i
+        chunks_to_insert.append(c)
+        
         # Cập nhật đếm chunks vào structure
         ch = c.get("chapter")
         le = c.get("lesson")
@@ -278,15 +334,27 @@ def ingest_pdf(
                 pages_dict = meta_count["lessons"][le]
                 if "pages" in pages_dict:
                     pages_dict["pages"] = sorted(list(set(pages_dict["pages"] + [c.get("page")])))
-
-    books_meta[book_name] = {
-        "id": _compute_book_id(book_name, grade),
-        "grade": grade,
-        "structure": book_structure
-    }
-    meta["books"] = books_meta
-    with open(META_PATH, "w", encoding="utf-8") as f:
-        json.dump(meta, f, ensure_ascii=False, indent=2)
+    
+    # Insert chunks into MongoDB
+    chunk_repo.insert_chunks(chunks_to_insert, book_id)
+    
+    # Create chapters and lessons collections
+    chapter_order = 0
+    for ch_title, ch_info in structured.items():
+        chapter_id = _compute_chapter_id(book_id, ch_title)
+        chapter_repo.upsert_chapter(chapter_id, book_id, ch_title, chapter_order)
+        chapter_order += 1
+        
+        # Create lessons for this chapter
+        lesson_order = 0
+        for le_title in ch_info.get("lessons", {}).keys():
+            lesson_id = _compute_lesson_id(chapter_id, le_title)
+            lesson_page = ch_info.get("lesson_pages", {}).get(le_title)
+            lesson_repo.upsert_lesson(lesson_id, chapter_id, book_id, le_title, lesson_page, lesson_order)
+            lesson_order += 1
+    
+    # Save book structure to MongoDB
+    book_repo.upsert_book(book_id, book_name, grade, book_structure)
 
     duration = int(time.time() - t0)
     logger.info(f"Ingestion completed in {duration}s, chunks: {len(chunks)}")
