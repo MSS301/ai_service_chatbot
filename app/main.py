@@ -40,11 +40,11 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-app.include_router(ingest.router, prefix="/admin", tags=["Ingestion"])
-app.include_router(rag.router, prefix="/rag", tags=["RAG Query"])
+app.include_router(ingest.router, prefix="/api/ai_service/admin", tags=["Ingestion"])
+app.include_router(rag.router, prefix="/api/ai_service/rag", tags=["RAG Query"])
 
 logger = get_logger(__name__)
 
-@app.get("/", tags=["Health"])
+@app.get("/api/ai_service/", tags=["Health"])
 def health_check():
     return {"status": "ok", "message": "AI Service Chatbot is running 🚀"}
