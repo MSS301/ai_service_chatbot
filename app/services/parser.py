@@ -3,9 +3,13 @@ from pdf2image import convert_from_bytes
 import pytesseract
 from typing import List, Dict, Tuple
 import re
+from PIL import ImageFile
 from app.core.logger import get_logger
 from app.core.config import FORCE_OCR, OPENAI_API_KEY
 from openai import OpenAI
+
+# Enable loading truncated images
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 logger = get_logger(__name__)
 
@@ -399,24 +403,65 @@ def parse_pdf_bytes(pdf_bytes: bytes, lang: str = "vie", prefer_text: bool = Tru
             images = convert_from_bytes(pdf_bytes, dpi=300)
             
             for i, img in enumerate(images):
-                txt = pytesseract.image_to_string(img, lang=lang)
-                detected_chapter, detected_lesson = _detect_chapter_info(txt[:2000], i+1)
-                
-                if detected_chapter:
-                    current_chapter = detected_chapter
-                    logger.info(f"📘 Page {i+1}: Chapter = '{current_chapter}'")
-                
-                if detected_lesson:
-                    current_lesson = detected_lesson
-                    logger.info(f"📗 Page {i+1}: Lesson = '{current_lesson}'")
-                
-                pages.append({
-                    "page_num": i + 1,
-                    "text": txt,
-                    "blocks": [],
-                    "chapter": current_chapter,
-                    "lesson": current_lesson
-                })
+                try:
+                    txt = pytesseract.image_to_string(img, lang=lang)
+                    detected_chapter, detected_lesson = _detect_chapter_info(txt[:2000], i+1)
+                    
+                    if detected_chapter:
+                        current_chapter = detected_chapter
+                        logger.info(f"📘 Page {i+1}: Chapter = '{current_chapter}'")
+                    
+                    if detected_lesson:
+                        current_lesson = detected_lesson
+                        logger.info(f"📗 Page {i+1}: Lesson = '{current_lesson}'")
+                    
+                    pages.append({
+                        "page_num": i + 1,
+                        "text": txt,
+                        "blocks": [],
+                        "chapter": current_chapter,
+                        "lesson": current_lesson
+                    })
+                except OSError as e:
+                    logger.warning(f"⚠️ Page {i+1}: Image truncated or corrupted, skipping OCR. Error: {e}")
+                    # Fallback: try to extract text directly from PDF if possible
+                    try:
+                        page = doc[i]
+                        txt = page.get_text()
+                        detected_chapter, detected_lesson = _detect_chapter_info(txt[:2000], i+1)
+                        
+                        if detected_chapter:
+                            current_chapter = detected_chapter
+                        if detected_lesson:
+                            current_lesson = detected_lesson
+                        
+                        pages.append({
+                            "page_num": i + 1,
+                            "text": txt,
+                            "blocks": page.get_text("dict").get("blocks", []),
+                            "chapter": current_chapter,
+                            "lesson": current_lesson
+                        })
+                    except Exception as e2:
+                        logger.error(f"❌ Page {i+1}: Failed to extract text (OCR and PDF both failed). Error: {e2}")
+                        # Add empty page to maintain page numbering
+                        pages.append({
+                            "page_num": i + 1,
+                            "text": "",
+                            "blocks": [],
+                            "chapter": current_chapter,
+                            "lesson": current_lesson
+                        })
+                except Exception as e:
+                    logger.error(f"❌ Page {i+1}: Unexpected error during OCR. Error: {e}")
+                    # Add empty page to maintain page numbering
+                    pages.append({
+                        "page_num": i + 1,
+                        "text": "",
+                        "blocks": [],
+                        "chapter": current_chapter,
+                        "lesson": current_lesson
+                    })
         
         # Summary logging
         unique_chapters = {p["chapter"] for p in pages if p["chapter"]}

@@ -297,7 +297,8 @@ def ingest_pdf(
     for ch_title, ch_info in structured.items():
         chapter_id = _compute_chapter_id(book_id, ch_title)
         chapter_id_map[ch_title] = chapter_id
-        for le_title in ch_info.get("lessons", {}).keys():
+        # lessons is a list of strings, not a dict
+        for le_title in ch_info.get("lessons", []):
             lesson_id = _compute_lesson_id(chapter_id, le_title)
             lesson_id_map[le_title] = lesson_id
     
@@ -347,7 +348,8 @@ def ingest_pdf(
         
         # Create lessons for this chapter
         lesson_order = 0
-        for le_title in ch_info.get("lessons", {}).keys():
+        # lessons is a list of strings, not a dict
+        for le_title in ch_info.get("lessons", []):
             lesson_id = _compute_lesson_id(chapter_id, le_title)
             lesson_page = ch_info.get("lesson_pages", {}).get(le_title)
             lesson_repo.upsert_lesson(lesson_id, chapter_id, book_id, le_title, lesson_page, lesson_order)

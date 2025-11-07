@@ -75,6 +75,33 @@ class LessonRepository:
         result = self.collection.delete_many({"chapter_id": chapter_id})
         return result.deleted_count
     
+    def update_lesson(self, lesson_id: str, title: str = None, page: int = None, order: int = None) -> bool:
+        """Update lesson by lesson_id"""
+        from datetime import datetime
+        update_data = {"updated_at": datetime.utcnow()}
+        if title is not None:
+            update_data["title"] = title
+        if page is not None:
+            update_data["page"] = page
+        if order is not None:
+            update_data["order"] = order
+        
+        result = self.collection.update_one(
+            {"lesson_id": lesson_id},
+            {"$set": update_data}
+        )
+        return result.modified_count > 0
+    
+    def delete_lesson(self, lesson_id: str) -> bool:
+        """Delete lesson by lesson_id"""
+        result = self.collection.delete_one({"lesson_id": lesson_id})
+        return result.deleted_count > 0
+    
+    def delete_lessons_by_chapter(self, chapter_id: str) -> int:
+        """Delete all lessons for a chapter"""
+        result = self.collection.delete_many({"chapter_id": chapter_id})
+        return result.deleted_count
+    
     def delete_lessons_by_book(self, book_id: str) -> int:
         """Delete all lessons for a book"""
         result = self.collection.delete_many({"book_id": book_id})

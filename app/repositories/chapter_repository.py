@@ -59,6 +59,26 @@ class ChapterRepository:
             {"_id": 0}
         ).sort("order", 1))
     
+    def update_chapter(self, chapter_id: str, title: str = None, order: int = None) -> bool:
+        """Update chapter by chapter_id"""
+        from datetime import datetime
+        update_data = {"updated_at": datetime.utcnow()}
+        if title is not None:
+            update_data["title"] = title
+        if order is not None:
+            update_data["order"] = order
+        
+        result = self.collection.update_one(
+            {"chapter_id": chapter_id},
+            {"$set": update_data}
+        )
+        return result.modified_count > 0
+    
+    def delete_chapter(self, chapter_id: str) -> bool:
+        """Delete chapter by chapter_id"""
+        result = self.collection.delete_one({"chapter_id": chapter_id})
+        return result.deleted_count > 0
+    
     def delete_chapters_by_book(self, book_id: str) -> int:
         """Delete all chapters for a book"""
         result = self.collection.delete_many({"book_id": book_id})

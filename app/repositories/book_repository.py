@@ -74,6 +74,23 @@ class BookRepository:
             logger.info(f"Deleted book: {book_id}")
         return deleted
     
+    def update_book(self, book_id: str, book_name: str = None, grade: int = None, structure: Dict = None) -> bool:
+        """Update book by book_id"""
+        from datetime import datetime
+        update_data = {"updated_at": datetime.utcnow()}
+        if book_name is not None:
+            update_data["book_name"] = book_name
+        if grade is not None:
+            update_data["grade"] = grade
+        if structure is not None:
+            update_data["structure"] = structure
+        
+        result = self.collection.update_one(
+            {"book_id": book_id},
+            {"$set": update_data}
+        )
+        return result.modified_count > 0
+    
     def delete_book_by_name(self, book_name: str) -> bool:
         """Delete book by book_name"""
         result = self.collection.delete_one({"book_name": book_name})

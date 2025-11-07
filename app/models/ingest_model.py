@@ -4,8 +4,8 @@ class IngestRequest(BaseModel):
     pdf_url: str
     book_name: str
     grade: int
-    force_reparse: bool = False
-    force_clear_cache: bool = False
+    force_reparse: bool = True
+    force_clear_cache: bool = True
 
 class IngestResponse(BaseModel):
     status: str
