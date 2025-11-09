@@ -1,6 +1,22 @@
 from pydantic import BaseModel
 from typing import Optional, Dict, Any
 
+# ========== Grade Models ==========
+class GradeCreateRequest(BaseModel):
+    grade_number: int
+    grade_name: str
+
+class GradeUpdateRequest(BaseModel):
+    grade_number: Optional[int] = None
+    grade_name: Optional[str] = None
+
+class GradeResponse(BaseModel):
+    grade_id: str
+    grade_number: int
+    grade_name: str
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
 # ========== Book Models ==========
 class BookCreateRequest(BaseModel):
     book_name: str
