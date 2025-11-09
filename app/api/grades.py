@@ -55,6 +55,35 @@ def get_all_grades():
     
     return grades
 
+@router.get("/{grade_id}/books")
+def get_books_by_grade(grade_id: str = Path(..., description="Grade ID")):
+    """
+    📚 Lấy danh sách tất cả sách thuộc grade này
+    """
+    grade_repo = GradeRepository()
+    book_repo = BookRepository()
+    
+    # Verify grade exists
+    grade = grade_repo.get_grade_by_id(grade_id)
+    if not grade:
+        raise HTTPException(status_code=404, detail=f"Grade '{grade_id}' not found")
+    
+    # Get all books for this grade
+    books = list(book_repo.collection.find({"grade_id": grade_id}, {"_id": 0}))
+    
+    # Convert datetime to string for each book
+    for book in books:
+        book["created_at"] = str(book.get("created_at")) if book.get("created_at") else None
+        book["updated_at"] = str(book.get("updated_at")) if book.get("updated_at") else None
+    
+    return {
+        "grade_id": grade_id,
+        "grade_name": grade.get("grade_name"),
+        "grade_number": grade.get("grade_number"),
+        "books": books,
+        "total": len(books)
+    }
+
 @router.get("/{grade_id}", response_model=GradeResponse)
 def get_grade(grade_id: str = Path(..., description="Grade ID")):
     """Get grade by ID"""
