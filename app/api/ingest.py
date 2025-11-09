@@ -1,10 +1,12 @@
 from fastapi import APIRouter, HTTPException
+from typing import Optional
 from app.models.ingest_model import IngestRequest, IngestResponse
-from app.services.indexer import ingest_pdf, _compute_book_id
+from app.services.indexer import ingest_pdf, _compute_book_id, rebuild_faiss_index
 from app.repositories.book_repository import BookRepository
 from app.repositories.chunk_repository import ChunkRepository
 from app.repositories.chapter_repository import ChapterRepository
 from app.repositories.lesson_repository import LessonRepository
+from app.core.logger import get_logger
 import os
 
 # Optional import for migration (only if needed)
@@ -18,8 +20,47 @@ except ImportError:
 router = APIRouter()
 
 CACHE_DIR = "app/data/cache"
+logger = get_logger(__name__)
 
-@router.get("/ingest")
+
+def _delete_book_resources(book_id: str, book_name: Optional[str] = None):
+    """Xóa toàn bộ dữ liệu liên quan tới book_id (chunks, chapters, lessons, metadata, cache, FAISS)."""
+    chunk_repo = ChunkRepository()
+    chapter_repo = ChapterRepository()
+    lesson_repo = LessonRepository()
+    book_repo = BookRepository()
+
+    deleted_chunks = chunk_repo.delete_chunks_by_book(book_id)
+    deleted_lessons = lesson_repo.delete_lessons_by_book(book_id)
+    deleted_chapters = chapter_repo.delete_chapters_by_book(book_id)
+
+    # Delete book metadata (failsafe: ignore if already removed)
+    book_deleted = book_repo.delete_book(book_id)
+    if not book_deleted:
+        logger.warning(f"Book metadata for '{book_id}' was not found during deletion")
+
+    # Xóa cache (nếu có)
+    if os.path.exists(CACHE_DIR):
+        for f in os.listdir(CACHE_DIR):
+            try:
+                os.remove(os.path.join(CACHE_DIR, f))
+            except Exception:
+                pass
+
+    # Rebuild FAISS index để đồng bộ
+    logger.info("Rebuilding FAISS index after deleting book...")
+    rebuild_faiss_index()
+
+    return {
+        "status": "deleted",
+        "book_id": book_id,
+        "book_name": book_name,
+        "removed_chunks": deleted_chunks,
+        "removed_chapters": deleted_chapters,
+        "removed_lessons": deleted_lessons,
+    }
+
+@router.get("/")
 def get_all_ingested_books():
     """
     📘 Lấy danh sách tất cả sách đã ingest (từ MongoDB)
@@ -48,7 +89,7 @@ def get_all_ingested_books():
     
     return {"books": books}
 
-@router.get("/ingest/id/{book_id}")
+@router.get("/id/{book_id}")
 def get_book_by_id(book_id: str):
     """
     🔎 Tìm sách theo book_id
@@ -66,7 +107,7 @@ def get_book_by_id(book_id: str):
         "structure": book.get("structure", {})
     }
 
-@router.get("/ingest/id/{book_id}/structure")
+@router.get("/id/{book_id}/structure")
 def get_book_structure_by_id(book_id: str):
     """
     📖 Lấy cấu trúc chương/bài chi tiết bằng book_id
@@ -84,7 +125,7 @@ def get_book_structure_by_id(book_id: str):
         "structure": book.get("structure", {})
     }
 
-@router.get("/ingest/{book_name}/structure")
+@router.get("/{book_name}/structure")
 def get_book_structure(book_name: str):
     """
     📖 Lấy cấu trúc chương/bài chi tiết của một sách cụ thể
@@ -102,7 +143,7 @@ def get_book_structure(book_name: str):
         "structure": book.get("structure", {})
     }
 
-@router.post("/ingest", response_model=IngestResponse)
+@router.post("/", response_model=IngestResponse)
 def ingest_book(req: IngestRequest):
     result = ingest_pdf(
         pdf_url=req.pdf_url,
@@ -113,7 +154,7 @@ def ingest_book(req: IngestRequest):
     )
     return result
 
-@router.post("/ingest/migrate")
+@router.post("/migrate")
 def migrate_books_to_mongodb():
     """
     🔄 Migrate dữ liệu từ metadata.json sang MongoDB (nếu có)
@@ -134,7 +175,7 @@ def migrate_books_to_mongodb():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Migration failed: {str(e)}")
 
-@router.get("/ingest/collections/status")
+@router.get("/collections/status")
 def get_collections_status():
     """
     📊 Kiểm tra trạng thái collections trong MongoDB
@@ -168,53 +209,31 @@ def get_collections_status():
     
     return status
 
-@router.delete("/ingest/{book_name}")
-def delete_ingested_book(book_name: str):
+@router.delete("/by-id/{book_id}")
+def delete_ingested_book_by_id(book_id: str):
     """
-    ❌ Xóa toàn bộ dữ liệu (MongoDB + cache) của 1 sách cụ thể
+    ❌ Xóa toàn bộ dữ liệu của một sách theo book_id.
     """
     book_repo = BookRepository()
-    chunk_repo = ChunkRepository()
-    chapter_repo = ChapterRepository()
-    lesson_repo = LessonRepository()
-    
+    book = book_repo.get_book_by_id(book_id)
+
+    if not book:
+        raise HTTPException(status_code=404, detail=f"Book '{book_id}' not found")
+
+    book_name = book.get("book_name")
+    return _delete_book_resources(book_id=book_id, book_name=book_name)
+
+
+@router.delete("/{book_name}")
+def delete_ingested_book(book_name: str):
+    """
+    ❌ Xóa toàn bộ dữ liệu (MongoDB + cache + FAISS) của một sách theo tên.
+    """
+    book_repo = BookRepository()
     book = book_repo.get_book_by_name(book_name)
+
     if not book:
         raise HTTPException(status_code=404, detail=f"Book '{book_name}' not found")
-    
+
     book_id = book.get("book_id")
-    
-    # Delete chunks
-    deleted_chunks = chunk_repo.delete_chunks_by_book(book_id)
-    
-    # Delete lessons
-    deleted_lessons = lesson_repo.delete_lessons_by_book(book_id)
-    
-    # Delete chapters
-    deleted_chapters = chapter_repo.delete_chapters_by_book(book_id)
-    
-    # Delete book metadata
-    book_repo.delete_book_by_name(book_name)
-    
-    # Xóa cache (nếu có)
-    # Yêu cầu: xóa hết cache để lần ingest sau luôn mới
-    if os.path.exists(CACHE_DIR):
-        for f in os.listdir(CACHE_DIR):
-            try:
-                os.remove(os.path.join(CACHE_DIR, f))
-            except Exception:
-                pass
-    
-    # Rebuild FAISS index sau khi xóa sách để đồng bộ
-    from app.services.indexer import rebuild_faiss_index
-    logger.info("Rebuilding FAISS index after deleting book...")
-    rebuild_faiss_index()
-    
-    return {
-        "status": "deleted",
-        "book_name": book_name,
-        "book_id": book_id,
-        "removed_chunks": deleted_chunks,
-        "removed_chapters": deleted_chapters,
-        "removed_lessons": deleted_lessons
-    }
+    return _delete_book_resources(book_id=book_id, book_name=book_name)

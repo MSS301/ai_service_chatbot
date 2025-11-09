@@ -43,7 +43,7 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-app.include_router(ingest.router, prefix="/api/ai_service/admin", tags=["Ingestion"])
+app.include_router(ingest.router, prefix="/api/ai_service/ingestion", tags=["Ingestion"])
 app.include_router(rag.router, prefix="/api/ai_service/rag", tags=["RAG Query"])
 app.include_router(grades.router, prefix="/api/ai_service/grades", tags=["Grades"])
 app.include_router(books.router, prefix="/api/ai_service/books", tags=["Books"])
