@@ -1,6 +1,7 @@
 import os, json, time, hashlib, requests
 from typing import Dict, List, Optional
 import numpy as np, faiss
+from pymongo import UpdateOne
 from app.core.config import INDEX_PATH, DATA_DIR, CACHE_DIR
 from app.core.logger import get_logger
 from app.services.parser import parse_pdf_bytes, extract_toc_candidates
@@ -59,12 +60,7 @@ def rebuild_faiss_index():
     for i, chunk in enumerate(all_chunks):
         old_idx = chunk.get("embedding_index")
         if old_idx != i:
-            bulk_ops.append({
-                "updateOne": {
-                    "filter": {"_id": chunk["_id"]},
-                    "update": {"$set": {"embedding_index": i}}
-                }
-            })
+            bulk_ops.append(UpdateOne({"_id": chunk["_id"]}, {"$set": {"embedding_index": i}}))
     
     if bulk_ops:
         chunk_repo.collection.bulk_write(bulk_ops)
