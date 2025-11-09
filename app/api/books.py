@@ -134,6 +134,13 @@ def delete_book(book_id: str = Path(..., description="Book ID")):
     if not deleted:
         raise HTTPException(status_code=500, detail="Failed to delete book")
     
+    # Rebuild FAISS index sau khi xóa sách để đồng bộ
+    from app.services.indexer import rebuild_faiss_index
+    from app.core.logger import get_logger
+    logger = get_logger(__name__)
+    logger.info("Rebuilding FAISS index after deleting book...")
+    rebuild_faiss_index()
+    
     return DeleteResponse(
         success=True,
         message=f"Book '{book_id}' and related data deleted successfully",

@@ -42,12 +42,26 @@ def _get_lesson(lesson_id: str):
     })
 
 def _load_index_chunks():
-    """Load FAISS index and get all chunks from MongoDB"""
+    """Load FAISS index and get all chunks from MongoDB, sorted by embedding_index"""
+    if not os.path.exists(INDEX_PATH):
+        logger.error(f"FAISS index file not found: {INDEX_PATH}")
+        raise FileNotFoundError(f"FAISS index file not found: {INDEX_PATH}")
+    
     index = faiss.read_index(INDEX_PATH)
+    num_vectors = index.ntotal
+    logger.info(f"Loaded FAISS index with {num_vectors} vectors from {INDEX_PATH}")
+    
     chunk_repo = ChunkRepository()
-    # Get all chunks (could be optimized with pagination if needed)
-    all_chunks = chunk_repo.collection.find({})
+    # Get all chunks sorted by embedding_index to match FAISS index order
+    all_chunks = chunk_repo.collection.find({}).sort("embedding_index", 1)
     chunks_list = list(all_chunks)
+    
+    logger.info(f"Loaded {len(chunks_list)} chunks from MongoDB")
+    
+    # Check if counts match
+    if num_vectors != len(chunks_list):
+        logger.warning(f"Mismatch: FAISS has {num_vectors} vectors but MongoDB has {len(chunks_list)} chunks")
+    
     return index, chunks_list
 
 def _build_prompt(chunks, lesson, teacher_notes):
@@ -252,33 +266,51 @@ def rag_query(grade: int, book_id: str, chapter_id: str, lesson_id: str, content
     
     # Load index + chunks from MongoDB
     index, all_chunks = _load_index_chunks()
-    num_chunks = len(all_chunks)
+    num_vectors_in_index = index.ntotal  # Total vectors in FAISS index
+    num_chunks_in_db = len(all_chunks)  # Chunks in MongoDB
     
-    if num_chunks == 0:
-        logger.error("No chunks in metadata")
+    logger.info(f"FAISS index has {num_vectors_in_index} vectors, MongoDB has {num_chunks_in_db} chunks")
+    
+    if num_vectors_in_index == 0:
+        logger.error("FAISS index is empty")
         return {
             "sections": [],
             "note": "Chưa có dữ liệu SGK. Vui lòng ingest sách trước.",
             "sources": []
         }, [], []
     
-    # FAISS search
-    k_search = min(k * 3, num_chunks)  # Search more, filter later
-    distances, indices = index.search(qvec, k_search)
-    idxs = indices[0].tolist()
-    dists = distances[0].tolist()
+    # FAISS search - use num_vectors_in_index for k_search
+    k_search = min(k * 3, num_vectors_in_index)  # Search more, filter later
+    logger.info(f"Searching FAISS with k_search={k_search}, num_vectors={num_vectors_in_index}")
     
-    # Filter invalid indices
-    valid_pairs = [
-        (idx, dist) for idx, dist in zip(idxs, dists)
-        if 0 <= idx < num_chunks
-    ]
-    
-    if not valid_pairs:
-        logger.error("FAISS returned no valid indices")
+    try:
+        distances, indices = index.search(qvec, k_search)
+        idxs = indices[0].tolist()
+        dists = distances[0].tolist()
+        
+        logger.info(f"FAISS returned {len(idxs)} indices: {idxs[:5]}... (showing first 5)")
+        
+        # Filter invalid indices (FAISS returns -1 for empty slots if k_search > actual vectors)
+        # Use num_vectors_in_index, not num_chunks_in_db
+        valid_pairs = [
+            (idx, dist) for idx, dist in zip(idxs, dists)
+            if idx >= 0 and idx < num_vectors_in_index
+        ]
+        
+        logger.info(f"After filtering invalid indices: {len(valid_pairs)} valid pairs out of {len(idxs)}")
+        
+        if not valid_pairs:
+            logger.error(f"FAISS returned no valid indices. Raw indices: {idxs[:10]}, num_vectors: {num_vectors_in_index}")
+            return {
+                "sections": [],
+                "note": "Lỗi tìm kiếm. Vui lòng thử lại.",
+                "sources": []
+            }, [], []
+    except Exception as e:
+        logger.error(f"FAISS search failed: {e}")
         return {
             "sections": [],
-            "note": "Lỗi tìm kiếm. Vui lòng thử lại.",
+            "note": f"Lỗi tìm kiếm: {str(e)}",
             "sources": []
         }, [], []
     
@@ -287,9 +319,19 @@ def rag_query(grade: int, book_id: str, chapter_id: str, lesson_id: str, content
     idxs = [idx for idx, _ in valid_pairs]
     dists = [dist for _, dist in valid_pairs]
     
-    # Get chunks by embedding indices
+    # Get chunks by embedding indices from MongoDB
+    # Note: We query by embedding_index, not by position in array
     chunk_repo = ChunkRepository()
     retrieved_chunks = chunk_repo.get_chunks_by_indices(idxs)
+    
+    logger.info(f"Retrieved {len(retrieved_chunks)} chunks from MongoDB (requested {len(idxs)} indices), filtering by book_id={book_id}, chapter_id={chapter_id}, lesson_id={lesson_id}")
+    
+    # Debug: Check what book_id/chapter_id/lesson_id the chunks have
+    if retrieved_chunks:
+        sample_chunk = retrieved_chunks[0]
+        logger.info(f"Sample chunk: embedding_index={sample_chunk.get('embedding_index')}, book_id={sample_chunk.get('book_id')}, chapter_id={sample_chunk.get('chapter_id')}, lesson_id={sample_chunk.get('lesson_id')}")
+    else:
+        logger.warning(f"No chunks found for indices: {idxs[:10]}... (showing first 10)")
     
     # Filter by book_id, chapter_id, lesson_id
     filtered_chunks = [
@@ -298,6 +340,8 @@ def rag_query(grade: int, book_id: str, chapter_id: str, lesson_id: str, content
         and c.get("chapter_id") == chapter_id
         and c.get("lesson_id") == lesson_id
     ]
+    
+    logger.info(f"After exact filter: {len(filtered_chunks)} chunks match")
     
     # If no exact match, try chapter_id only
     if not filtered_chunks:

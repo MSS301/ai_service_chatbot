@@ -23,6 +23,63 @@ def _ensure_index(dim: int) -> faiss.IndexFlatL2:
     faiss.write_index(index, INDEX_PATH)
     return index
 
+def rebuild_faiss_index():
+    """
+    Rebuild FAISS index từ tất cả chunks trong MongoDB.
+    Đảm bảo FAISS index đồng bộ với MongoDB và cập nhật embedding_index.
+    """
+    from app.repositories.chunk_repository import ChunkRepository
+    from app.services.embedder import embed_texts
+    
+    chunk_repo = ChunkRepository()
+    
+    # Get all chunks sorted by embedding_index (or by _id if embedding_index missing)
+    all_chunks = list(chunk_repo.collection.find({}).sort("embedding_index", 1))
+    
+    if not all_chunks:
+        logger.info("No chunks to rebuild FAISS index")
+        # Create empty index or remove if exists
+        if os.path.exists(INDEX_PATH):
+            os.remove(INDEX_PATH)
+        return
+    
+    logger.info(f"Rebuilding FAISS index from {len(all_chunks)} chunks in MongoDB")
+    
+    # Get texts and embeddings
+    texts = [c.get("text", "") for c in all_chunks]
+    if not texts or not texts[0]:
+        logger.warning("Chunks have no text, skipping FAISS rebuild")
+        return
+    
+    vectors = embed_texts(texts)
+    dim = len(vectors[0])
+    
+    # Update embedding_index in MongoDB to match new order (0, 1, 2, ...)
+    bulk_ops = []
+    for i, chunk in enumerate(all_chunks):
+        old_idx = chunk.get("embedding_index")
+        if old_idx != i:
+            bulk_ops.append({
+                "updateOne": {
+                    "filter": {"_id": chunk["_id"]},
+                    "update": {"$set": {"embedding_index": i}}
+                }
+            })
+    
+    if bulk_ops:
+        chunk_repo.collection.bulk_write(bulk_ops)
+        logger.info(f"Updated {len(bulk_ops)} embedding_index values")
+    
+    # Create new index
+    index = faiss.IndexFlatL2(dim)
+    index.add(np.array(vectors, dtype="float32"))
+    
+    # Save index
+    os.makedirs(DATA_DIR, exist_ok=True)
+    faiss.write_index(index, INDEX_PATH)
+    
+    logger.info(f"Rebuilt FAISS index with {len(vectors)} vectors")
+
 # Removed _ensure_meta() - now using MongoDB repositories
 
 def _cache_key(book_name: str, grade_id: str, pdf_bytes: bytes) -> str:
@@ -256,6 +313,7 @@ def ingest_pdf(
     lesson_repo.create_indexes()
     
     # Delete existing data for this book if re-ingesting
+    was_existing = chunk_repo.collection.find_one({"book_id": book_id}) is not None
     chunk_repo.delete_chunks_by_book(book_id)
     chapter_repo.delete_chapters_by_book(book_id)
     lesson_repo.delete_lessons_by_book(book_id)
@@ -266,19 +324,16 @@ def ingest_pdf(
     dim = len(vectors[0])
 
     # Get max embedding_index from existing chunks (if any)
-    # For now, we'll use a simple approach: get max from all chunks
     max_index = 0
     try:
-        # Get all chunks to find max index (could be optimized with aggregation)
         all_chunks = chunk_repo.collection.find({}, {"embedding_index": 1}).sort("embedding_index", -1).limit(1)
         if all_chunks:
             max_index = all_chunks[0].get("embedding_index", 0) + 1
     except Exception:
         pass
     
-    index = _ensure_index(dim)
-    index.add(np.array(vectors, dtype="float32"))
-    faiss.write_index(index, INDEX_PATH)
+    # Add new chunks to MongoDB first
+    # (We'll rebuild FAISS index after inserting all chunks)
 
     # Trang theo chương từ pages
     chapter_pages: Dict[str, List[int]] = {}
@@ -320,7 +375,8 @@ def ingest_pdf(
             c["chapter"] = assign.get("chapter") or c.get("chapter")
             c["lesson"] = assign.get("lesson") or c.get("lesson")
         
-        # Add chapter_id and lesson_id
+        # Add book_id, chapter_id and lesson_id
+        c["book_id"] = book_id  # Ensure book_id is set
         ch_title = c.get("chapter")
         le_title = c.get("lesson")
         if ch_title and ch_title in chapter_id_map:

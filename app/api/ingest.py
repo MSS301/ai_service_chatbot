@@ -205,6 +205,11 @@ def delete_ingested_book(book_name: str):
             except Exception:
                 pass
     
+    # Rebuild FAISS index sau khi xóa sách để đồng bộ
+    from app.services.indexer import rebuild_faiss_index
+    logger.info("Rebuilding FAISS index after deleting book...")
+    rebuild_faiss_index()
+    
     return {
         "status": "deleted",
         "book_name": book_name,

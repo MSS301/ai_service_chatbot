@@ -46,11 +46,26 @@ class ChunkRepository:
         return list(self.collection.find({"book_id": book_id}, {"_id": 0}))
     
     def get_chunks_by_indices(self, indices: List[int]) -> List[Dict]:
-        """Get chunks by embedding indices"""
-        return list(self.collection.find(
-            {"embedding_index": {"$in": indices}},
-            {"_id": 0}
-        ))
+        """Get chunks by embedding indices, preserving the order of indices"""
+        if not indices:
+            return []
+        
+        # Get chunks and create a map for O(1) lookup
+        chunks_map = {
+            chunk["embedding_index"]: chunk
+            for chunk in self.collection.find(
+                {"embedding_index": {"$in": indices}},
+                {"_id": 0}
+            )
+        }
+        
+        # Return chunks in the same order as indices
+        result = []
+        for idx in indices:
+            if idx in chunks_map:
+                result.append(chunks_map[idx])
+        
+        return result
     
     def delete_chunks_by_book(self, book_id: str) -> int:
         """Delete all chunks for a book"""
