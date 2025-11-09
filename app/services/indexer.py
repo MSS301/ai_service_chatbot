@@ -25,8 +25,8 @@ def _ensure_index(dim: int) -> faiss.IndexFlatL2:
 
 # Removed _ensure_meta() - now using MongoDB repositories
 
-def _cache_key(book_name: str, grade: int, pdf_bytes: bytes) -> str:
-    return hashlib.md5((book_name+str(grade)+str(len(pdf_bytes))).encode()).hexdigest()
+def _cache_key(book_name: str, grade_id: str, pdf_bytes: bytes) -> str:
+    return hashlib.md5((book_name+grade_id+str(len(pdf_bytes))).encode()).hexdigest()
 
 def _compute_book_id(book_name: str, grade: int) -> str:
     """
@@ -119,7 +119,7 @@ def _build_page_assignments(structured: Dict) -> Dict[int, Dict[str, str]]:
 def ingest_pdf(
     pdf_url: str,
     book_name: str,
-    grade: int,
+    grade_id: str,
     force_reparse: bool = False,
     force_clear_cache: bool = False,
 ) -> Dict:
@@ -135,7 +135,7 @@ def ingest_pdf(
     logger.info(f"Downloading PDF: {pdf_url}")
     pdf_bytes = requests.get(pdf_url).content
 
-    key = _cache_key(book_name, grade, pdf_bytes)
+    key = _cache_key(book_name, grade_id, pdf_bytes)
     cache_file = os.path.join(CACHE_DIR, f"{key}_pages.json")
 
     if os.path.exists(cache_file) and not force_reparse:
@@ -232,8 +232,16 @@ def ingest_pdf(
                 "lesson_pages": {l["title"]: l["page"] for l in info.get("lessons", []) if l.get("page")}
             }
 
+    # Get grade_number from grade_id
+    from app.repositories.grade_repository import GradeRepository
+    grade_repo = GradeRepository()
+    grade = grade_repo.get_grade_by_id(grade_id)
+    if not grade:
+        raise ValueError(f"Grade '{grade_id}' not found")
+    grade_number = grade.get("grade_number")
+    
     # Compute book_id
-    book_id = _compute_book_id(book_name, grade)
+    book_id = _compute_book_id(book_name, grade_number)
     
     # Initialize repositories
     book_repo = BookRepository()
@@ -252,7 +260,7 @@ def ingest_pdf(
     chapter_repo.delete_chapters_by_book(book_id)
     lesson_repo.delete_lessons_by_book(book_id)
     
-    chunks = chunk_pages(pages, book_name, grade, size=800, overlap=100)
+    chunks = chunk_pages(pages, book_name, grade_number, size=800, overlap=100)
     texts = [c["text"] for c in chunks]
     vectors = embed_texts(texts)
     dim = len(vectors[0])
@@ -356,7 +364,7 @@ def ingest_pdf(
             lesson_order += 1
     
     # Save book structure to MongoDB
-    book_repo.upsert_book(book_id, book_name, grade, book_structure)
+    book_repo.upsert_book(book_id, book_name, grade_id, book_structure)
 
     duration = int(time.time() - t0)
     logger.info(f"Ingestion completed in {duration}s, chunks: {len(chunks)}")

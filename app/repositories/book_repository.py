@@ -20,9 +20,9 @@ class BookRepository:
         """Create indexes for better query performance"""
         self.collection.create_index("book_id", unique=True)
         self.collection.create_index("book_name")
-        self.collection.create_index("grade")
+        self.collection.create_index("grade_id")
     
-    def upsert_book(self, book_id: str, book_name: str, grade: int, structure: Dict) -> str:
+    def upsert_book(self, book_id: str, book_name: str, grade_id: str, structure: Dict) -> str:
         """
         Insert or update book metadata
         Returns: book_id
@@ -30,7 +30,7 @@ class BookRepository:
         doc = {
             "book_id": book_id,
             "book_name": book_name,
-            "grade": grade,
+            "grade_id": grade_id,
             "structure": structure,
             "created_at": None,
             "updated_at": None
@@ -74,14 +74,14 @@ class BookRepository:
             logger.info(f"Deleted book: {book_id}")
         return deleted
     
-    def update_book(self, book_id: str, book_name: str = None, grade: int = None, structure: Dict = None) -> bool:
+    def update_book(self, book_id: str, book_name: str = None, grade_id: str = None, structure: Dict = None) -> bool:
         """Update book by book_id"""
         from datetime import datetime
         update_data = {"updated_at": datetime.utcnow()}
         if book_name is not None:
             update_data["book_name"] = book_name
-        if grade is not None:
-            update_data["grade"] = grade
+        if grade_id is not None:
+            update_data["grade_id"] = grade_id
         if structure is not None:
             update_data["structure"] = structure
         

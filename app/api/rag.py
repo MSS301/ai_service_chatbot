@@ -10,10 +10,18 @@ router = APIRouter()
 @router.post("/query", response_model=RAGResponse)
 def rag_query_endpoint(req: RAGRequest):
     """
-    RAG Query với 5 params: grade, book_id, chapter_id, lesson_id, content
+    RAG Query với 5 params: grade_id, book_id, chapter_id, lesson_id, content
     """
+    # Get grade_number from grade_id
+    from app.repositories.grade_repository import GradeRepository
+    grade_repo = GradeRepository()
+    grade = grade_repo.get_grade_by_id(req.grade_id)
+    if not grade:
+        raise HTTPException(status_code=404, detail=f"Grade '{req.grade_id}' not found")
+    grade_number = grade.get("grade_number")
+    
     outline, distances, indices = rag_query(
-        grade=req.grade,
+        grade=grade_number,
         book_id=req.book_id,
         chapter_id=req.chapter_id,
         lesson_id=req.lesson_id,
@@ -27,20 +35,20 @@ def rag_query_endpoint(req: RAGRequest):
         "distances": distances
     }
 
-@router.get("/books/{grade}")
-def get_books_by_grade(grade: int):
+@router.get("/books/{grade_id}")
+def get_books_by_grade(grade_id: str):
     """
-    📚 Lấy danh sách sách đã ingest theo lớp
+    📚 Lấy danh sách sách đã ingest theo grade_id
     """
     book_repo = BookRepository()
-    books = book_repo.collection.find({"grade": grade}, {"_id": 0})
+    books = book_repo.collection.find({"grade_id": grade_id}, {"_id": 0})
     return {
-        "grade": grade,
+        "grade_id": grade_id,
         "books": [
             {
                 "book_id": b.get("book_id"),
                 "book_name": b.get("book_name"),
-                "grade": b.get("grade")
+                "grade_id": b.get("grade_id")
             }
             for b in books
         ]

@@ -133,9 +133,8 @@ def delete_grade(grade_id: str = Path(..., description="Grade ID")):
         raise HTTPException(status_code=404, detail=f"Grade '{grade_id}' not found")
     
     # Check if there are books associated with this grade
-    grade_number = existing.get("grade_number")
     all_books = book_repo.get_all_books()
-    books_with_grade = [b for b in all_books if b.get("grade") == grade_number]
+    books_with_grade = [b for b in all_books if b.get("grade_id") == grade_id]
     
     if books_with_grade:
         raise HTTPException(

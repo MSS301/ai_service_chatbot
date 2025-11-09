@@ -2,7 +2,7 @@ from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 
 class RAGRequest(BaseModel):
-    grade: int
+    grade_id: str
     book_id: str
     chapter_id: str
     lesson_id: str

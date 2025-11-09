@@ -20,18 +20,18 @@ class GradeResponse(BaseModel):
 # ========== Book Models ==========
 class BookCreateRequest(BaseModel):
     book_name: str
-    grade: int
+    grade_id: str
     structure: Optional[Dict[str, Any]] = None
 
 class BookUpdateRequest(BaseModel):
     book_name: Optional[str] = None
-    grade: Optional[int] = None
+    grade_id: Optional[str] = None
     structure: Optional[Dict[str, Any]] = None
 
 class BookResponse(BaseModel):
     book_id: str
     book_name: str
-    grade: int
+    grade_id: str
     structure: Optional[Dict[str, Any]] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None

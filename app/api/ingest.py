@@ -33,15 +33,15 @@ def get_all_ingested_books():
     for book in all_books:
         book_id = book.get("book_id")
         book_name = book.get("book_name")
-        grade = book.get("grade")
+        grade_id = book.get("grade_id")
         
         # Count chunks and pages
         chunks = chunk_repo.get_chunks_by_book(book_id)
-        pages = sorted(set(c.get("page") for c in chunks if c.get("page")))
+        pages = sorted({c.get("page") for c in chunks if c.get("page")})
         
         books[book_name] = {
             "id": book_id,
-            "grade": grade,
+            "grade_id": grade_id,
             "chunks": len(chunks),
             "pages": pages
         }
@@ -62,7 +62,7 @@ def get_book_by_id(book_id: str):
     return {
         "book_id": book.get("book_id"),
         "book_name": book.get("book_name"),
-        "grade": book.get("grade"),
+        "grade_id": book.get("grade_id"),
         "structure": book.get("structure", {})
     }
 
@@ -80,7 +80,7 @@ def get_book_structure_by_id(book_id: str):
     return {
         "book_id": book.get("book_id"),
         "book_name": book.get("book_name"),
-        "grade": book.get("grade"),
+        "grade_id": book.get("grade_id"),
         "structure": book.get("structure", {})
     }
 
@@ -98,7 +98,7 @@ def get_book_structure(book_name: str):
     return {
         "book_id": book.get("book_id"),
         "book_name": book.get("book_name"),
-        "grade": book.get("grade"),
+        "grade_id": book.get("grade_id"),
         "structure": book.get("structure", {})
     }
 
@@ -107,7 +107,7 @@ def ingest_book(req: IngestRequest):
     result = ingest_pdf(
         pdf_url=req.pdf_url,
         book_name=req.book_name,
-        grade=req.grade,
+        grade_id=req.grade_id,
         force_reparse=req.force_reparse,
         force_clear_cache=req.force_clear_cache,
     )

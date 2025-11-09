@@ -14,15 +14,24 @@ router = APIRouter()
 @router.post("", response_model=BookResponse, status_code=201)
 def create_book(req: BookCreateRequest):
     """Create a new book"""
+    from app.repositories.grade_repository import GradeRepository
+    
+    # Validate grade_id exists
+    grade_repo = GradeRepository()
+    grade = grade_repo.get_grade_by_id(req.grade_id)
+    if not grade:
+        raise HTTPException(status_code=404, detail=f"Grade '{req.grade_id}' not found")
+    
+    grade_number = grade.get("grade_number")
     book_repo = BookRepository()
-    book_id = _compute_book_id(req.book_name, req.grade)
+    book_id = _compute_book_id(req.book_name, grade_number)
     
     # Check if book already exists
     existing = book_repo.get_book_by_id(book_id)
     if existing:
         raise HTTPException(status_code=400, detail=f"Book with ID '{book_id}' already exists")
     
-    book_repo.upsert_book(book_id, req.book_name, req.grade, req.structure or {})
+    book_repo.upsert_book(book_id, req.book_name, req.grade_id, req.structure or {})
     book = book_repo.get_book_by_id(book_id)
     
     if not book:
@@ -75,11 +84,19 @@ def update_book(
     if not existing:
         raise HTTPException(status_code=404, detail=f"Book '{book_id}' not found")
     
+    # Validate grade_id if provided
+    if req and req.grade_id:
+        from app.repositories.grade_repository import GradeRepository
+        grade_repo = GradeRepository()
+        grade = grade_repo.get_grade_by_id(req.grade_id)
+        if not grade:
+            raise HTTPException(status_code=404, detail=f"Grade '{req.grade_id}' not found")
+    
     # Update book
     updated = book_repo.update_book(
         book_id=book_id,
         book_name=req.book_name if req else None,
-        grade=req.grade if req else None,
+        grade_id=req.grade_id if req else None,
         structure=req.structure if req else None
     )
     
