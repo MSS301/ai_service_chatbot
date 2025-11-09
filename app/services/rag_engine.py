@@ -83,16 +83,47 @@ def _build_prompt(chunks, lesson, teacher_notes):
     chunks_sorted = sorted(chunks[:8], key=score_chunk, reverse=True)
     
     # Build context với annotations rõ ràng
+    # Lấy tên từ MongoDB collections
+    from app.repositories.book_repository import BookRepository
+    from app.repositories.chapter_repository import ChapterRepository
+    from app.repositories.lesson_repository import LessonRepository
+    
+    book_repo_ctx = BookRepository()
+    chapter_repo_ctx = ChapterRepository()
+    lesson_repo_ctx = LessonRepository()
+    
     context_parts = []
     for i, c in enumerate(chunks_sorted[:5]):  # Top 5 chunks
-        chapter = c.get("chapter", "N/A")
-        lesson_info = c.get("lesson", "N/A")
-        page = c["page"]
-        text = c["text"][:1200]  # Limit 1200 chars/chunk
+        # Lấy book_name
+        chunk_book_id = c.get("book_id")
+        book_name = "N/A"
+        if chunk_book_id:
+            chunk_book = book_repo_ctx.get_book_by_id(chunk_book_id)
+            if chunk_book:
+                book_name = chunk_book.get("book_name", "N/A")
+        
+        # Lấy chapter title
+        chunk_chapter_id = c.get("chapter_id")
+        chapter = "N/A"
+        if chunk_chapter_id:
+            chunk_chapter = chapter_repo_ctx.get_chapter_by_id(chunk_chapter_id)
+            if chunk_chapter:
+                chapter = chunk_chapter.get("title", "N/A")
+        
+        # Lấy lesson title
+        chunk_lesson_id = c.get("lesson_id")
+        lesson_info = "N/A"
+        if chunk_lesson_id:
+            chunk_lesson = lesson_repo_ctx.get_lesson_by_id(chunk_lesson_id)
+            if chunk_lesson:
+                lesson_info = chunk_lesson.get("title", "N/A")
+        
+        page = c.get("page", 0)
+        text = c.get("text", "")[:1200]  # Limit 1200 chars/chunk
         
         context_parts.append(
             f"--- Nguồn {i+1} ---\n"
-            f"Sách: {c['book']}\n"
+            f"Sách: {book_name}\n"
             f"Chương: {chapter}\n"
             f"Bài: {lesson_info}\n"
             f"Trang: {page}\n"
@@ -380,15 +411,39 @@ def rag_query(grade: int, book_id: str, chapter_id: str, lesson_id: str, content
     prompt = _build_prompt(filtered_chunks, lesson_info, content)
     outline = _call_llm(prompt)
     
-    # Add source citations
+    # Add source citations - lấy tên từ MongoDB collections thay vì từ chunk metadata
     outline["sources"] = []
     for i, chunk in enumerate(filtered_chunks[:3]):  # Top 3 sources
         source_dist = dists[i] if i < len(dists) else 1.0
         
+        # Lấy book_name từ BookRepository
+        chunk_book_id = chunk.get("book_id")
+        book_name = "N/A"
+        if chunk_book_id:
+            chunk_book = book_repo.get_book_by_id(chunk_book_id)
+            if chunk_book:
+                book_name = chunk_book.get("book_name", "N/A")
+        
+        # Lấy chapter title từ ChapterRepository
+        chunk_chapter_id = chunk.get("chapter_id")
+        chapter_title = "N/A"
+        if chunk_chapter_id:
+            chunk_chapter = chapter_repo.get_chapter_by_id(chunk_chapter_id)
+            if chunk_chapter:
+                chapter_title = chunk_chapter.get("title", "N/A")
+        
+        # Lấy lesson title từ LessonRepository
+        chunk_lesson_id = chunk.get("lesson_id")
+        lesson_title = "N/A"
+        if chunk_lesson_id:
+            chunk_lesson = lesson_repo.get_lesson_by_id(chunk_lesson_id)
+            if chunk_lesson:
+                lesson_title = chunk_lesson.get("title", "N/A")
+        
         outline["sources"].append({
-            "book": chunk.get("book", "N/A"),
-            "chapter": chunk.get("chapter", "N/A"),
-            "lesson": chunk.get("lesson", "N/A"),
+            "book": book_name,
+            "chapter": chapter_title,
+            "lesson": lesson_title,
             "pages": [chunk.get("page", 0)],
             "confidence": round(max(0, 1 - source_dist), 4)  # Convert L2 to 0-1 score
         })
