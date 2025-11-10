@@ -15,3 +15,26 @@ class RAGResponse(BaseModel):
     sources: List[Dict[str, Any]]
     indices: List[int]
     distances: List[float]
+
+class SlideContentRequest(BaseModel):
+    content: str
+    style: Optional[str] = None
+
+class SlideContentResponse(BaseModel):
+    markdown: str
+
+class SlidesGPTRequest(BaseModel):
+    prompt: str
+
+class SlidesGPTResponse(BaseModel):
+    id: str
+    embed: str
+    download: str
+
+class TemplateSlidesRequest(BaseModel):
+    title: str
+    outline: Dict[str, Any]
+    theme: Optional[str] = None
+
+class TemplateSlidesResponse(BaseModel):
+    slides: List[Dict[str, Any]]

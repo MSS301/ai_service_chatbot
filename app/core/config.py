@@ -23,3 +23,7 @@ MONGODB_DB_NAME = os.getenv("MONGODB_DB_NAME", "ai_chatbot_mss301")
 INDEX_PATH = os.path.join(DATA_DIR, "index.faiss")
 # META_PATH deprecated - using MongoDB instead
 # META_PATH = os.path.join(DATA_DIR, "metadata.json")  # Only for migration script
+
+# Slides generation (external) - used to build embed/download links in RAG response
+SLIDES_BASE_URL = os.getenv("SLIDES_BASE_URL", "https://api.slidesgpt.com")
+SLIDESGPT_API_KEY = os.getenv("SLIDESGPT_API_KEY", "")
