@@ -7,6 +7,7 @@ class RAGRequest(BaseModel):
     chapter_id: str
     lesson_id: str
     content: str  # teacher_notes/content
+    subject_id: Optional[str] = None
     k: int = 8
 
 class RAGResponse(BaseModel):

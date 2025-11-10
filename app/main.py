@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
-from .api import ingest, rag, books, chapters, lessons, grades
+from .api import ingest, rag, books, chapters, lessons, grades, subjects
 from .core.logger import get_logger
 from .core.database import get_database, close_database
 from .repositories.book_repository import BookRepository
@@ -17,7 +17,7 @@ async def lifespan(app: FastAPI):
     ensure_data_dirs()
     try:
         # Initialize MongoDB connection and create indexes
-        db = get_database()
+        get_database()
         book_repo = BookRepository()
         chunk_repo = ChunkRepository()
         chapter_repo = ChapterRepository()
@@ -49,6 +49,7 @@ app.include_router(grades.router, prefix="/api/ai_service/grades", tags=["Grades
 app.include_router(books.router, prefix="/api/ai_service/books", tags=["Books"])
 app.include_router(chapters.router, prefix="/api/ai_service/chapters", tags=["Chapters"])
 app.include_router(lessons.router, prefix="/api/ai_service/lessons", tags=["Lessons"])
+app.include_router(subjects.router, prefix="/api/ai_service/subjects", tags=["Subjects"])
 
 logger = get_logger(__name__)
 

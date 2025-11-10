@@ -19,6 +19,16 @@ def rag_query_endpoint(req: RAGRequest):
     if not grade:
         raise HTTPException(status_code=404, detail=f"Grade '{req.grade_id}' not found")
     grade_number = grade.get("grade_number")
+
+    # Validate subject if provided: book.subject_id must match req.subject_id
+    if req.subject_id:
+        book_repo = BookRepository()
+        book = book_repo.get_book_by_id(req.book_id)
+        if not book:
+            raise HTTPException(status_code=404, detail=f"Book '{req.book_id}' not found")
+        book_subject_id = book.get("subject_id")
+        if book_subject_id != req.subject_id:
+            raise HTTPException(status_code=400, detail="subject_id does not match the book's subject")
     
     outline, distances, indices = rag_query(
         grade=grade_number,

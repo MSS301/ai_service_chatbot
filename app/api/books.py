@@ -15,12 +15,20 @@ router = APIRouter()
 def create_book(req: BookCreateRequest):
     """Create a new book"""
     from app.repositories.grade_repository import GradeRepository
+    from app.repositories.subject_repository import SubjectRepository
     
     # Validate grade_id exists
     grade_repo = GradeRepository()
     grade = grade_repo.get_grade_by_id(req.grade_id)
     if not grade:
         raise HTTPException(status_code=404, detail=f"Grade '{req.grade_id}' not found")
+
+    # Validate subject_id if provided
+    subject_id = req.subject_id
+    if subject_id:
+        subj_repo = SubjectRepository()
+        if not subj_repo.get_subject_by_id(subject_id):
+            raise HTTPException(status_code=404, detail=f"Subject '{subject_id}' not found")
     
     grade_number = grade.get("grade_number")
     book_repo = BookRepository()
@@ -31,7 +39,7 @@ def create_book(req: BookCreateRequest):
     if existing:
         raise HTTPException(status_code=400, detail=f"Book with ID '{book_id}' already exists")
     
-    book_repo.upsert_book(book_id, req.book_name, req.grade_id, req.structure or {})
+    book_repo.upsert_book(book_id, req.book_name, req.grade_id, req.structure or {}, subject_id=subject_id)
     book = book_repo.get_book_by_id(book_id)
     
     if not book:
@@ -91,13 +99,21 @@ def update_book(
         grade = grade_repo.get_grade_by_id(req.grade_id)
         if not grade:
             raise HTTPException(status_code=404, detail=f"Grade '{req.grade_id}' not found")
+
+    # Validate subject_id if provided
+    if req and req.subject_id:
+        from app.repositories.subject_repository import SubjectRepository
+        subj_repo = SubjectRepository()
+        if not subj_repo.get_subject_by_id(req.subject_id):
+            raise HTTPException(status_code=404, detail=f"Subject '{req.subject_id}' not found")
     
     # Update book
     updated = book_repo.update_book(
         book_id=book_id,
         book_name=req.book_name if req else None,
         grade_id=req.grade_id if req else None,
-        structure=req.structure if req else None
+        structure=req.structure if req else None,
+        subject_id=req.subject_id if req else None
     )
     
     if not updated:

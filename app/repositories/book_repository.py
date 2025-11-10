@@ -21,8 +21,9 @@ class BookRepository:
         self.collection.create_index("book_id", unique=True)
         self.collection.create_index("book_name")
         self.collection.create_index("grade_id")
+        self.collection.create_index("subject_id")
     
-    def upsert_book(self, book_id: str, book_name: str, grade_id: str, structure: Dict) -> str:
+    def upsert_book(self, book_id: str, book_name: str, grade_id: str, structure: Dict, subject_id: Optional[str] = None) -> str:
         """
         Insert or update book metadata
         Returns: book_id
@@ -31,24 +32,25 @@ class BookRepository:
             "book_id": book_id,
             "book_name": book_name,
             "grade_id": grade_id,
+            "subject_id": subject_id,
             "structure": structure,
             "created_at": None,
             "updated_at": None
         }
         
-        from datetime import datetime
+        from datetime import datetime, timezone
         existing = self.collection.find_one({"book_id": book_id})
         if existing:
             doc["created_at"] = existing.get("created_at")
-            doc["updated_at"] = datetime.utcnow()
+            doc["updated_at"] = datetime.now(timezone.utc)
             self.collection.update_one(
                 {"book_id": book_id},
                 {"$set": doc}
             )
             logger.info(f"Updated book: {book_id}")
         else:
-            doc["created_at"] = datetime.utcnow()
-            doc["updated_at"] = datetime.utcnow()
+            doc["created_at"] = datetime.now(timezone.utc)
+            doc["updated_at"] = datetime.now(timezone.utc)
             self.collection.insert_one(doc)
             logger.info(f"Created book: {book_id}")
         
@@ -74,22 +76,26 @@ class BookRepository:
             logger.info(f"Deleted book: {book_id}")
         return deleted
     
-    def update_book(self, book_id: str, book_name: str = None, grade_id: str = None, structure: Dict = None) -> bool:
+    def update_book(self, book_id: str, book_name: str = None, grade_id: str = None, structure: Dict = None, subject_id: Optional[str] = None) -> bool:
         """Update book by book_id"""
-        from datetime import datetime
-        update_data = {"updated_at": datetime.utcnow()}
+        from datetime import datetime, timezone
+        update_data = {"updated_at": datetime.now(timezone.utc)}
         if book_name is not None:
             update_data["book_name"] = book_name
         if grade_id is not None:
             update_data["grade_id"] = grade_id
         if structure is not None:
             update_data["structure"] = structure
+        if subject_id is not None:
+            update_data["subject_id"] = subject_id
         
         result = self.collection.update_one(
             {"book_id": book_id},
             {"$set": update_data}
         )
         return result.modified_count > 0
+
+
     
     def delete_book_by_name(self, book_name: str) -> bool:
         """Delete book by book_name"""

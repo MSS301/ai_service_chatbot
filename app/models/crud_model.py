@@ -1,6 +1,27 @@
 from pydantic import BaseModel
 from typing import Optional, Dict, Any
 
+# ========== Subject Models ==========
+class SubjectCreateRequest(BaseModel):
+    subject_code: str
+    subject_name: str
+
+class SubjectUpdateRequest(BaseModel):
+    subject_code: Optional[str] = None
+    subject_name: Optional[str] = None
+
+class SubjectResponse(BaseModel):
+    subject_id: str
+    subject_code: str
+    subject_name: str
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+# ========== Grade-Subject Link Models ==========
+class GradeSubjectLinkRequest(BaseModel):
+    grade_id: str
+    subject_id: str
+
 # ========== Grade Models ==========
 class GradeCreateRequest(BaseModel):
     grade_number: int
@@ -21,17 +42,20 @@ class GradeResponse(BaseModel):
 class BookCreateRequest(BaseModel):
     book_name: str
     grade_id: str
+    subject_id: Optional[str] = None
     structure: Optional[Dict[str, Any]] = None
 
 class BookUpdateRequest(BaseModel):
     book_name: Optional[str] = None
     grade_id: Optional[str] = None
+    subject_id: Optional[str] = None
     structure: Optional[Dict[str, Any]] = None
 
 class BookResponse(BaseModel):
     book_id: str
     book_name: str
     grade_id: str
+    subject_id: Optional[str] = None
     structure: Optional[Dict[str, Any]] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
