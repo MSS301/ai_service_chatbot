@@ -3,7 +3,8 @@ from app.models.rag_model import (
     RAGRequest, RAGResponse,
     SlideContentRequest, SlideContentResponse,
     SlidesGPTRequest, SlidesGPTResponse,
-    TemplateSlidesRequest, TemplateSlidesResponse
+    TemplateSlidesRequest, TemplateSlidesResponse,
+    ContentReviseRequest, ContentReviseResponse
 )
 from app.services.rag_engine import rag_query
 from app.repositories.book_repository import BookRepository
@@ -12,6 +13,7 @@ from app.repositories.lesson_repository import LessonRepository
 from app.core.config import SLIDES_BASE_URL, OPENAI_API_KEY, SLIDESGPT_API_KEY
 from openai import OpenAI
 import requests, uuid, os
+from app.repositories.content_repository import ContentRepository
 
 router = APIRouter()
 
@@ -28,12 +30,19 @@ def rag_query_endpoint(req: RAGRequest):
         raise HTTPException(status_code=404, detail=f"Grade '{req.grade_id}' not found")
     grade_number = grade.get("grade_number")
 
+    # Fetch book/chapter/lesson for names
+    book_repo = BookRepository()
+    book = book_repo.get_book_by_id(req.book_id)
+    if not book:
+        raise HTTPException(status_code=404, detail=f"Book '{req.book_id}' not found")
+
+    chapter_repo = ChapterRepository()
+    chapter = chapter_repo.get_chapter_by_id(req.chapter_id)
+    lesson_repo = LessonRepository()
+    lesson = lesson_repo.get_lesson_by_id(req.lesson_id)
+
     # Validate subject if provided: book.subject_id must match req.subject_id
     if req.subject_id:
-        book_repo = BookRepository()
-        book = book_repo.get_book_by_id(req.book_id)
-        if not book:
-            raise HTTPException(status_code=404, detail=f"Book '{req.book_id}' not found")
         book_subject_id = book.get("subject_id")
         if book_subject_id != req.subject_id:
             raise HTTPException(status_code=400, detail="subject_id does not match the book's subject")
@@ -46,11 +55,78 @@ def rag_query_endpoint(req: RAGRequest):
         content=req.content,
         k=req.k
     )
+
+    # Generate teaching content with OpenAI and persist
+    content_text = ""
+    if OPENAI_API_KEY:
+        try:
+            client = OpenAI(api_key=OPENAI_API_KEY)
+            book_name = book.get("book_name", "")
+            chapter_name = (chapter or {}).get("title", "")
+            lesson_name = (lesson or {}).get("title", "")
+            grade_name = grade.get("grade_name", f"Lớp {grade_number}")
+
+            prompt = (
+                "Prompt Chuẩn Soạn Slide (Giới hạn 5–7 slide)\n\n"
+                f"Hãy soạn bộ Slide bài giảng gồm khoảng 5–7 slide dựa trên nội dung chính của bài học trong sách giáo khoa {book_name}.\n\n"
+                f"Bài học thuộc {lesson_name}, nằm trong {chapter_name} của chương trình {grade_name}.\n\n"
+                "Yêu cầu cụ thể:\n"
+                "1. Slide 1 – Tiêu đề và Giới thiệu: Ghi rõ tên bài, chương, lớp học và mục đích tổng quát của bài học.\n"
+                "2. Slide 2 – Mục tiêu bài học: Liệt kê 3–5 mục tiêu chính học sinh cần đạt được sau bài học.\n"
+                "3. Slide 3–5 – Nội dung trọng tâm:\n"
+                "   - Chia thành các phần logic (I, II, III, …), trình bày dưới dạng bullet points.\n"
+                "   - Giải thích ngắn gọn, dễ hiểu.\n"
+                "   - Mỗi phần có thể có ví dụ minh họa hoặc ứng dụng thực tế ngắn.\n"
+                "4. Slide 6 – Câu hỏi củng cố: Gồm 3–5 câu hỏi ngắn (trắc nghiệm hoặc tự luận) giúp học sinh ôn tập.\n"
+                "5. Slide 7 – Tổng kết: Nêu lại các ý chính, liên hệ thực tiễn hoặc gợi mở cho bài tiếp theo.\n\n"
+                "Yêu cầu trình bày:\n"
+                "- Ngôn ngữ: tiếng Việt, rõ ràng, thân thiện, dễ hiểu.\n"
+                "- Giọng văn: sư phạm, hiện đại, có tính tương tác.\n"
+                "- Không dùng mã Markdown hoặc HTML.\n"
+                "- Nội dung đủ để giáo viên có thể dùng trình chiếu trực tiếp.\n\n"
+                "Nếu nội dung sách giáo khoa không đầy đủ, hãy bổ sung kiến thức chuẩn theo chương trình phổ thông.\n\n"
+                "Dữ liệu tham chiếu:\n"
+                f"- Outline RAG:\n{outline}\n\n"
+                f"- Ghi chú giáo viên:\n{req.content}\n"
+            )
+            resp = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": "Bạn là trợ lý giáo viên, biên soạn giáo án đúng phạm vi SGK và chuẩn CTPT."},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.2,
+            )
+            content_text = resp.choices[0].message.content or ""
+        except Exception:
+            content_text = ""
+
+    content_id = None
+    try:
+        crepo = ContentRepository()
+        crepo.create_indexes()
+        content_id = crepo.new_content_id()
+        crepo.insert_content({
+            "content_id": content_id,
+            "grade_id": req.grade_id,
+            "book_id": req.book_id,
+            "chapter_id": req.chapter_id,
+            "lesson_id": req.lesson_id,
+            "subject_id": req.subject_id,
+            "outline": outline,
+            "content_text": content_text,
+            "version": 1
+        })
+    except Exception:
+        pass
+
     return {
         "outline": outline,
         "sources": outline.get("sources", []),
         "indices": indices,
-        "distances": distances
+        "distances": distances,
+        "content_id": content_id,
+        "content_text": content_text
     }
 
 @router.post("/generate/slide-content", response_model=SlideContentResponse)
@@ -130,6 +206,40 @@ def generate_template_slides(req: TemplateSlidesRequest):
     # Slide kết thúc
     slides.append({"type": "closing", "title": "Tổng kết", "bullets": ["Câu hỏi?", "Bài tập/vận dụng"]})
     return {"slides": slides}
+
+@router.post("/content/{content_id}/revise", response_model=ContentReviseResponse)
+def revise_content(content_id: str, req: ContentReviseRequest):
+    crepo = ContentRepository()
+    doc = crepo.get_by_id(content_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="content_id not found")
+    if not OPENAI_API_KEY:
+        raise HTTPException(status_code=500, detail="OPENAI_API_KEY not configured")
+
+    current = doc.get("content_text", "")
+    outline = doc.get("outline", {})
+
+    client = OpenAI(api_key=OPENAI_API_KEY)
+    prompt = (
+        "Bạn là trợ lý giáo viên. Hãy chỉnh sửa nội dung theo yêu cầu sau, giữ đúng phạm vi SGK.\n"
+        f"Instruction người dùng:\n{req.instruction}\n\n"
+        "Nội dung hiện tại:\n"
+        f"{current}\n\n"
+        "Outline SGK tham chiếu:\n"
+        f"{outline}\n"
+    )
+    resp = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": "Biên tập nội dung giáo án theo chỉ dẫn, không bịa thêm ngoài SGK."},
+            {"role": "user", "content": prompt},
+        ],
+        temperature=0.2,
+    )
+    new_text = resp.choices[0].message.content or current
+
+    crepo.update_content(content_id, new_text)
+    return {"content_id": content_id, "content_text": new_text}
 
 @router.get("/books/{grade_id}")
 def get_books_by_grade(grade_id: str):

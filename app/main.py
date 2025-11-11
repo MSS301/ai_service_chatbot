@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
-from .api import ingest, rag, books, chapters, lessons, grades, subjects
+from .api import ingest, rag, books, chapters, lessons, grades, subjects, slides
 from .core.logger import get_logger
 from .core.database import get_database, close_database
 from .repositories.book_repository import BookRepository
@@ -50,6 +50,7 @@ app.include_router(books.router, prefix="/api/ai_service/books", tags=["Books"])
 app.include_router(chapters.router, prefix="/api/ai_service/chapters", tags=["Chapters"])
 app.include_router(lessons.router, prefix="/api/ai_service/lessons", tags=["Lessons"])
 app.include_router(subjects.router, prefix="/api/ai_service/subjects", tags=["Subjects"])
+app.include_router(slides.router, prefix="/api/ai_service/slides", tags=["Slides"])
 
 logger = get_logger(__name__)
 

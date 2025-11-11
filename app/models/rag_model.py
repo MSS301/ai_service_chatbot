@@ -15,6 +15,15 @@ class RAGResponse(BaseModel):
     sources: List[Dict[str, Any]]
     indices: List[int]
     distances: List[float]
+    content_id: Optional[str] = None
+    content_text: Optional[str] = None
+
+class ContentReviseRequest(BaseModel):
+    instruction: str
+
+class ContentReviseResponse(BaseModel):
+    content_id: str
+    content_text: str
 
 class SlideContentRequest(BaseModel):
     content: str
