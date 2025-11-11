@@ -20,6 +20,7 @@ class RAGResponse(BaseModel):
 
 class ContentReviseRequest(BaseModel):
     instruction: str
+    created_by: Optional[str] = None
 
 class ContentReviseResponse(BaseModel):
     content_id: str

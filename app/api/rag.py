@@ -14,6 +14,7 @@ from app.core.config import SLIDES_BASE_URL, OPENAI_API_KEY, SLIDESGPT_API_KEY
 from openai import OpenAI
 import requests, uuid, os
 from app.repositories.content_repository import ContentRepository
+import re
 
 router = APIRouter()
 
@@ -207,6 +208,40 @@ def generate_template_slides(req: TemplateSlidesRequest):
     slides.append({"type": "closing", "title": "Tổng kết", "bullets": ["Câu hỏi?", "Bài tập/vận dụng"]})
     return {"slides": slides}
 
+def _clean_content_text(text: str) -> str:
+    """
+    Remove common leading prefaces and separators like 'Dưới đây là...', 'Sau đây là...', and top '---' lines.
+    Keep the main content intact.
+    """
+    if not text:
+        return text
+    lines = [ln.strip() for ln in text.splitlines()]
+    # Drop leading empty lines
+    while lines and lines[0] == "":
+        lines.pop(0)
+    # Drop one or two leading separators '---'
+    while lines and re.fullmatch(r"-{3,}", lines[0]):
+        lines.pop(0)
+    # Drop common Vietnamese preface phrases at the very beginning
+    preface_patterns = [
+        r"^Dưới\s+đây\s+là\s+",
+        r"^Sau\s+đây\s+là\s+",
+        r"^Nội\s+dung\s+đã\s+được\s+chỉnh\s+sửa",
+        r"^Đây\s+là\s+nội\s+dung",
+    ]
+    if lines:
+        for pat in preface_patterns:
+            if re.search(pat, lines[0], flags=re.IGNORECASE):
+                lines.pop(0)
+                break
+    # Drop a separator again if it appears after removing preface
+    while lines and re.fullmatch(r"-{3,}", lines[0]):
+        lines.pop(0)
+    # Rejoin
+    cleaned = "\n".join(lines).strip()
+    return cleaned
+
+
 @router.post("/content/{content_id}/revise", response_model=ContentReviseResponse)
 def revise_content(content_id: str, req: ContentReviseRequest):
     crepo = ContentRepository()
@@ -221,8 +256,12 @@ def revise_content(content_id: str, req: ContentReviseRequest):
 
     client = OpenAI(api_key=OPENAI_API_KEY)
     prompt = (
-        "Bạn là trợ lý giáo viên. Hãy chỉnh sửa nội dung theo yêu cầu sau, giữ đúng phạm vi SGK.\n"
-        f"Instruction người dùng:\n{req.instruction}\n\n"
+        "Bạn là trợ lý giáo viên. Hãy CHỈ chỉnh sửa nội dung bài giảng theo yêu cầu dưới đây, giữ đúng phạm vi SGK.\n"
+        "- Chỉ trả về NỘI DUNG CHÍNH THỨC sau khi chỉnh sửa.\n"
+        "- KHÔNG thêm lời dẫn, không mở đầu bằng các cụm như: 'Dưới đây là...', 'Sau đây là...'.\n"
+        "- KHÔNG chèn các đường kẻ '---' hay tiêu đề phụ không cần thiết.\n"
+        "- KHÔNG dùng code block Markdown.\n\n"
+        f"Yêu cầu chỉnh sửa của người dùng:\n{req.instruction}\n\n"
         "Nội dung hiện tại:\n"
         f"{current}\n\n"
         "Outline SGK tham chiếu:\n"
@@ -231,14 +270,21 @@ def revise_content(content_id: str, req: ContentReviseRequest):
     resp = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
-            {"role": "system", "content": "Biên tập nội dung giáo án theo chỉ dẫn, không bịa thêm ngoài SGK."},
+            {"role": "system", "content": "Biên tập nội dung giáo án theo chỉ dẫn, không bịa ngoài SGK. Chỉ trả về nội dung cuối cùng, không tiền tố/hậu tố."},
             {"role": "user", "content": prompt},
         ],
         temperature=0.2,
     )
-    new_text = resp.choices[0].message.content or current
+    raw_text = resp.choices[0].message.content or current
+    new_text = _clean_content_text(raw_text)
 
-    crepo.update_content(content_id, new_text)
+    crepo.revise_content(
+        content_id=content_id,
+        new_text=new_text,
+        instruction=req.instruction,
+        previous_text=current,
+        created_by=getattr(req, "created_by", None),
+    )
     return {"content_id": content_id, "content_text": new_text}
 
 @router.get("/books/{grade_id}")

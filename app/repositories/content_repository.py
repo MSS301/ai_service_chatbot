@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from app.core.database import get_database
 from app.core.logger import get_logger
 import uuid
+from typing import Any
 
 logger = get_logger(__name__)
 
@@ -73,5 +74,35 @@ class ContentRepository:
             {"grade_id": grade_id, "book_id": book_id, "chapter_id": chapter_id, "lesson_id": lesson_id},
             {"_id": 0}
         ).sort("updated_at", -1))
+
+    def revise_content(
+        self,
+        content_id: str,
+        new_text: str,
+        instruction: str,
+        previous_text: Optional[str] = None,
+        created_by: Optional[str] = None,
+        extra_meta: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        """
+        Update content_text and push a revision record into 'revisions' array.
+        """
+        now = datetime.now(timezone.utc)
+        revision: Dict[str, Any] = {
+            "instruction": instruction,
+            "previous_text": previous_text,
+            "new_text": new_text,
+            "created_by": created_by,
+            "created_at": now,
+        }
+        update_doc: Dict[str, Any] = {
+            "$set": {"content_text": new_text, "updated_at": now},
+            "$inc": {"version": 1},
+            "$push": {"revisions": revision},
+        }
+        if extra_meta:
+            update_doc["$set"].update(extra_meta)
+        res = self.collection.update_one({"content_id": content_id}, update_doc)
+        return res.modified_count > 0
 
 
