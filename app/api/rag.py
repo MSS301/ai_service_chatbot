@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from app.models.rag_model import (
     RAGRequest, RAGResponse,
     SlideContentRequest, SlideContentResponse,
@@ -11,18 +11,22 @@ from app.repositories.book_repository import BookRepository
 from app.repositories.chapter_repository import ChapterRepository
 from app.repositories.lesson_repository import LessonRepository
 from app.core.config import SLIDES_BASE_URL, OPENAI_API_KEY, SLIDESGPT_API_KEY
+from app.core.auth import get_current_user, UserInfo
+from app.core.logger import get_logger
 from openai import OpenAI
 import requests, uuid, os
 from app.repositories.content_repository import ContentRepository
 import re
 
 router = APIRouter()
+logger = get_logger(__name__)
 
 @router.post("/query", response_model=RAGResponse)
-def rag_query_endpoint(req: RAGRequest):
+def rag_query_endpoint(req: RAGRequest, user: UserInfo = Depends(get_current_user)):
     """
     RAG Query với 5 params: grade_id, book_id, chapter_id, lesson_id, content
     """
+    logger.info(f"User {user.user_id} requested RAG query for lesson {req.lesson_id}")
     # Get grade_number from grade_id
     from app.repositories.grade_repository import GradeRepository
     grade_repo = GradeRepository()
@@ -131,7 +135,7 @@ def rag_query_endpoint(req: RAGRequest):
     }
 
 @router.post("/generate/slide-content", response_model=SlideContentResponse)
-def generate_slide_content(req: SlideContentRequest):
+def generate_slide_content(req: SlideContentRequest, user: UserInfo = Depends(get_current_user)):
     """
     Tạo nội dung slide (markdown) bằng OpenAI từ content/outline người dùng truyền vào.
     """
@@ -154,7 +158,7 @@ def generate_slide_content(req: SlideContentRequest):
     return {"markdown": md}
 
 @router.post("/generate/slidesgpt", response_model=SlidesGPTResponse)
-def generate_slides_slidesgpt(req: SlidesGPTRequest):
+def generate_slides_slidesgpt(req: SlidesGPTRequest, user: UserInfo = Depends(get_current_user)):
     """
     Gọi SlidesGPT API để tạo slide từ prompt.
     """
@@ -186,7 +190,7 @@ def generate_slides_slidesgpt(req: SlidesGPTRequest):
         raise HTTPException(status_code=502, detail=f"SlidesGPT request failed: {e}")
 
 @router.post("/generate/template-slides", response_model=TemplateSlidesResponse)
-def generate_template_slides(req: TemplateSlidesRequest):
+def generate_template_slides(req: TemplateSlidesRequest, user: UserInfo = Depends(get_current_user)):
     """
     Sinh slide theo khung template có sẵn (trả về JSON cấu trúc slide).
     Client có thể render ra PPT/HTML tùy ý ở phía trước.
@@ -243,7 +247,7 @@ def _clean_content_text(text: str) -> str:
 
 
 @router.post("/content/{content_id}/revise", response_model=ContentReviseResponse)
-def revise_content(content_id: str, req: ContentReviseRequest):
+def revise_content(content_id: str, req: ContentReviseRequest, user: UserInfo = Depends(get_current_user)):
     crepo = ContentRepository()
     doc = crepo.get_by_id(content_id)
     if not doc:
@@ -288,7 +292,7 @@ def revise_content(content_id: str, req: ContentReviseRequest):
     return {"content_id": content_id, "content_text": new_text}
 
 @router.get("/books/{grade_id}")
-def get_books_by_grade(grade_id: str):
+def get_books_by_grade(grade_id: str, user: UserInfo = Depends(get_current_user)):
     """
     📚 Lấy danh sách sách đã ingest theo grade_id
     """
@@ -307,7 +311,7 @@ def get_books_by_grade(grade_id: str):
     }
 
 @router.get("/chapters/{book_id}")
-def get_chapters_by_book(book_id: str):
+def get_chapters_by_book(book_id: str, user: UserInfo = Depends(get_current_user)):
     """
     📖 Lấy danh sách chương của một sách
     """
@@ -326,7 +330,7 @@ def get_chapters_by_book(book_id: str):
     }
 
 @router.get("/lessons/{chapter_id}")
-def get_lessons_by_chapter(chapter_id: str):
+def get_lessons_by_chapter(chapter_id: str, user: UserInfo = Depends(get_current_user)):
     """
     📝 Lấy danh sách bài học của một chương
     """
