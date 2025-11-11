@@ -1,10 +1,12 @@
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Response
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Response, Depends
 from typing import Any, Dict, List, Optional
 from app.models.rag_model import (
     SlidesGPTRequest, SlidesGPTResponse,
     TemplateSlidesRequest, TemplateSlidesResponse
 )
 from app.core.config import SLIDES_BASE_URL, SLIDESGPT_API_KEY, OPENAI_API_KEY
+from app.core.auth import get_current_user, UserInfo
+from app.core.logger import get_logger
 import requests, uuid, os
 from pydantic import BaseModel
 from app.repositories.content_repository import ContentRepository
@@ -18,9 +20,10 @@ from pptx.enum.shapes import PP_PLACEHOLDER
 from pptx.util import Pt
 
 router = APIRouter()
+logger = get_logger(__name__)
 
 @router.post("/slidesgpt", response_model=SlidesGPTResponse)
-def create_with_slidesgpt(req: SlidesGPTRequest):
+def create_with_slidesgpt(req: SlidesGPTRequest, user: UserInfo = Depends(get_current_user)):
     """
     Tạo slide qua SlidesGPT (proxy).
     Body: { "prompt": "..." }
@@ -58,7 +61,7 @@ class SlidesGPTFromContentRequest(BaseModel):
     created_by: str | None = None
 
 @router.post("/gpt", response_model=SlidesGPTResponse)
-def create_with_slidesgpt_from_content(req: SlidesGPTFromContentRequest):
+def create_with_slidesgpt_from_content(req: SlidesGPTFromContentRequest, user: UserInfo = Depends(get_current_user)):
     """
     Tạo slide qua SlidesGPT bằng content_id.
     Hệ thống tự lấy content_text đã sinh làm prompt.
@@ -105,7 +108,7 @@ def create_with_slidesgpt_from_content(req: SlidesGPTFromContentRequest):
 
 
 @router.post("/template", response_model=TemplateSlidesResponse)
-def create_with_template(req: TemplateSlidesRequest):
+def create_with_template(req: TemplateSlidesRequest, user: UserInfo = Depends(get_current_user)):
     """
     Tạo slide theo khung template (JSON) để client render PPT/HTML.
     Body: { title, outline, theme? }
@@ -136,7 +139,7 @@ class TemplateYAMLResponse(BaseModel):
 
 
 @router.post("/template/yaml", response_model=TemplateYAMLResponse)
-def generate_template_yaml_from_content(req: TemplateYAMLFromContentRequest):
+def generate_template_yaml_from_content(req: TemplateYAMLFromContentRequest, user: UserInfo = Depends(get_current_user)):
     """
     Sinh YAML slide từ content_id theo schema:
     slides: [ {layout, title, bullets: [...] } ]
@@ -256,7 +259,7 @@ class ContentYAMLResponse(BaseModel):
 
 
 @router.get("/template/yaml/{content_yaml_id}", response_model=ContentYAMLResponse)
-def get_content_yaml(content_yaml_id: str):
+def get_content_yaml(content_yaml_id: str, user: UserInfo = Depends(get_current_user)):
     crepo = ContentRepository()
     doc = crepo.get_content_yaml_by_id(content_yaml_id)
     if not doc:
@@ -271,7 +274,7 @@ def get_content_yaml(content_yaml_id: str):
 
 
 @router.get("/template/yaml/by-content/{content_id}", response_model=list[ContentYAMLResponse])
-def list_content_yaml_by_content(content_id: str):
+def list_content_yaml_by_content(content_id: str, user: UserInfo = Depends(get_current_user)):
     crepo = ContentRepository()
     docs = crepo.list_content_yaml_by_content(content_id)
     for doc in docs:
@@ -284,7 +287,7 @@ def list_content_yaml_by_content(content_id: str):
 
 
 @router.put("/template/yaml/{content_yaml_id}", response_model=ContentYAMLResponse)
-def update_content_yaml(content_yaml_id: str, req: ContentYAMLUpdateRequest):
+def update_content_yaml(content_yaml_id: str, req: ContentYAMLUpdateRequest, user: UserInfo = Depends(get_current_user)):
     crepo = ContentRepository()
     ok = crepo.update_content_yaml(content_yaml_id, req.yaml, updated_by=req.updated_by)
     if not ok:
@@ -294,7 +297,7 @@ def update_content_yaml(content_yaml_id: str, req: ContentYAMLUpdateRequest):
 
 
 @router.delete("/template/yaml/{content_yaml_id}")
-def delete_content_yaml(content_yaml_id: str):
+def delete_content_yaml(content_yaml_id: str, user: UserInfo = Depends(get_current_user)):
     crepo = ContentRepository()
     ok = crepo.delete_content_yaml(content_yaml_id)
     if not ok:
@@ -320,6 +323,7 @@ async def upload_template(
     name: str = Form(...),
     description: str | None = Form(None),
     file: UploadFile = File(...),
+    user: UserInfo = Depends(get_current_user)
 ):
     if not file.filename or not file.content_type:
         raise HTTPException(status_code=400, detail="Invalid file")
@@ -342,7 +346,7 @@ async def upload_template(
 
 
 @router.get("/templates", response_model=list[TemplateMetaResponse])
-def list_templates():
+def list_templates(user: UserInfo = Depends(get_current_user)):
     trepo = SlideTemplateRepository()
     items = trepo.list_templates()
     for it in items:
@@ -353,7 +357,7 @@ def list_templates():
 
 
 @router.get("/templates/{template_id}", response_model=TemplateMetaResponse)
-def get_template(template_id: str):
+def get_template(template_id: str, user: UserInfo = Depends(get_current_user)):
     trepo = SlideTemplateRepository()
     doc = trepo.get_template_by_id(template_id)
     if not doc:
@@ -365,7 +369,7 @@ def get_template(template_id: str):
 
 
 @router.get("/templates/{template_id}/download")
-def download_template(template_id: str):
+def download_template(template_id: str, user: UserInfo = Depends(get_current_user)):
     trepo = SlideTemplateRepository()
     meta = trepo.get_template_by_id(template_id)
     if not meta:
@@ -380,7 +384,7 @@ def download_template(template_id: str):
 
 
 @router.delete("/templates/{template_id}")
-def delete_template(template_id: str):
+def delete_template(template_id: str, user: UserInfo = Depends(get_current_user)):
     trepo = SlideTemplateRepository()
     ok = trepo.delete_template(template_id)
     if not ok:
@@ -411,7 +415,7 @@ class TemplateInspectResponse(BaseModel):
 
 
 @router.get("/templates/{template_id}/inspect", response_model=TemplateInspectResponse)
-def inspect_template(template_id: str):
+def inspect_template(template_id: str, user: UserInfo = Depends(get_current_user)):
     trepo = SlideTemplateRepository()
     meta = trepo.get_template_by_id(template_id)
     if not meta:
@@ -459,7 +463,7 @@ class ExportPPTXRequest(BaseModel):
 
 
 @router.post("/template/export")
-def export_pptx(req: ExportPPTXRequest):
+def export_pptx(req: ExportPPTXRequest, user: UserInfo = Depends(get_current_user)):
     """
     Tạo file PPTX từ content_yaml_id và template_id lưu trong DB.
     """

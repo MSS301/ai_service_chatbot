@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Path
+from fastapi import APIRouter, HTTPException, Path, Depends
 from typing import List
 from app.repositories.book_repository import BookRepository
 from app.repositories.chapter_repository import ChapterRepository
@@ -8,11 +8,14 @@ from app.models.crud_model import (
     BookCreateRequest, BookUpdateRequest, BookResponse, DeleteResponse
 )
 from app.services.indexer import _compute_book_id
+from app.core.auth import get_current_user, UserInfo
+from app.core.logger import get_logger
 
 router = APIRouter()
+logger = get_logger(__name__)
 
 @router.post("", response_model=BookResponse, status_code=201)
-def create_book(req: BookCreateRequest):
+def create_book(req: BookCreateRequest, user: UserInfo = Depends(get_current_user)):
     """Create a new book"""
     from app.repositories.grade_repository import GradeRepository
     from app.repositories.subject_repository import SubjectRepository
@@ -52,7 +55,7 @@ def create_book(req: BookCreateRequest):
     return book
 
 @router.get("", response_model=List[BookResponse])
-def get_all_books():
+def get_all_books(user: UserInfo = Depends(get_current_user)):
     """Get all books"""
     book_repo = BookRepository()
     books = book_repo.get_all_books()
@@ -65,7 +68,7 @@ def get_all_books():
     return books
 
 @router.get("/{book_id}", response_model=BookResponse)
-def get_book(book_id: str = Path(..., description="Book ID")):
+def get_book(book_id: str = Path(..., description="Book ID"), user: UserInfo = Depends(get_current_user)):
     """Get book by ID"""
     book_repo = BookRepository()
     book = book_repo.get_book_by_id(book_id)
@@ -82,7 +85,8 @@ def get_book(book_id: str = Path(..., description="Book ID")):
 @router.put("/{book_id}", response_model=BookResponse)
 def update_book(
     book_id: str = Path(..., description="Book ID"),
-    req: BookUpdateRequest = None
+    req: BookUpdateRequest = None,
+    user: UserInfo = Depends(get_current_user)
 ):
     """Update book by ID"""
     book_repo = BookRepository()
@@ -127,7 +131,7 @@ def update_book(
     return book
 
 @router.delete("/{book_id}", response_model=DeleteResponse)
-def delete_book(book_id: str = Path(..., description="Book ID")):
+def delete_book(book_id: str = Path(..., description="Book ID"), user: UserInfo = Depends(get_current_user)):
     """Delete book by ID (also deletes related chapters, lessons, and chunks)"""
     book_repo = BookRepository()
     chapter_repo = ChapterRepository()

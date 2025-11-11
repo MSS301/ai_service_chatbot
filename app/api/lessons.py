@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Path, Query
+from fastapi import APIRouter, HTTPException, Path, Query, Depends
 from typing import List, Optional
 from app.repositories.lesson_repository import LessonRepository
 from app.repositories.chapter_repository import ChapterRepository
@@ -7,11 +7,14 @@ from app.models.crud_model import (
     LessonCreateRequest, LessonUpdateRequest, LessonResponse, DeleteResponse
 )
 from app.services.indexer import _compute_lesson_id
+from app.core.auth import get_current_user, UserInfo
+from app.core.logger import get_logger
 
 router = APIRouter()
+logger = get_logger(__name__)
 
 @router.post("", response_model=LessonResponse, status_code=201)
-def create_lesson(req: LessonCreateRequest):
+def create_lesson(req: LessonCreateRequest, user: UserInfo = Depends(get_current_user)):
     """Create a new lesson"""
     lesson_repo = LessonRepository()
     chapter_repo = ChapterRepository()
@@ -49,7 +52,8 @@ def create_lesson(req: LessonCreateRequest):
 @router.get("", response_model=List[LessonResponse])
 def get_all_lessons(
     chapter_id: Optional[str] = Query(None, description="Filter by chapter_id"),
-    book_id: Optional[str] = Query(None, description="Filter by book_id")
+    book_id: Optional[str] = Query(None, description="Filter by book_id"),
+    user: UserInfo = Depends(get_current_user)
 ):
     """Get all lessons, optionally filtered by chapter_id or book_id"""
     lesson_repo = LessonRepository()
@@ -70,7 +74,7 @@ def get_all_lessons(
     return lessons
 
 @router.get("/{lesson_id}", response_model=LessonResponse)
-def get_lesson(lesson_id: str = Path(..., description="Lesson ID")):
+def get_lesson(lesson_id: str = Path(..., description="Lesson ID"), user: UserInfo = Depends(get_current_user)):
     """Get lesson by ID"""
     lesson_repo = LessonRepository()
     lesson = lesson_repo.get_lesson_by_id(lesson_id)
@@ -87,7 +91,8 @@ def get_lesson(lesson_id: str = Path(..., description="Lesson ID")):
 @router.put("/{lesson_id}", response_model=LessonResponse)
 def update_lesson(
     lesson_id: str = Path(..., description="Lesson ID"),
-    req: LessonUpdateRequest = None
+    req: LessonUpdateRequest = None,
+    user: UserInfo = Depends(get_current_user)
 ):
     """Update lesson by ID"""
     lesson_repo = LessonRepository()
@@ -116,7 +121,7 @@ def update_lesson(
     return lesson
 
 @router.delete("/{lesson_id}", response_model=DeleteResponse)
-def delete_lesson(lesson_id: str = Path(..., description="Lesson ID")):
+def delete_lesson(lesson_id: str = Path(..., description="Lesson ID"), user: UserInfo = Depends(get_current_user)):
     """Delete lesson by ID"""
     lesson_repo = LessonRepository()
     

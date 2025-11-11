@@ -1,15 +1,18 @@
-from fastapi import APIRouter, HTTPException, Path
+from fastapi import APIRouter, HTTPException, Path, Depends
 from typing import List
 from app.models.crud_model import (
     SubjectCreateRequest, SubjectUpdateRequest, SubjectResponse, GradeSubjectLinkRequest
 )
 from app.repositories.subject_repository import SubjectRepository, GradeSubjectRepository
 from app.repositories.grade_repository import GradeRepository
+from app.core.auth import get_current_user, UserInfo
+from app.core.logger import get_logger
 
 router = APIRouter()
+logger = get_logger(__name__)
 
 @router.post("", response_model=SubjectResponse, status_code=201)
-def create_subject(req: SubjectCreateRequest):
+def create_subject(req: SubjectCreateRequest, user: UserInfo = Depends(get_current_user)):
     repo = SubjectRepository()
     repo.create_indexes()
     subject_id = repo.compute_subject_id(req.subject_code)
@@ -23,12 +26,12 @@ def create_subject(req: SubjectCreateRequest):
     return subj
 
 @router.get("", response_model=List[SubjectResponse])
-def list_subjects():
+def list_subjects(user: UserInfo = Depends(get_current_user)):
     repo = SubjectRepository()
     return repo.get_all_subjects()
 
 @router.get("/{subject_id}", response_model=SubjectResponse)
-def get_subject(subject_id: str = Path(..., description="Subject ID")):
+def get_subject(subject_id: str = Path(..., description="Subject ID"), user: UserInfo = Depends(get_current_user)):
     repo = SubjectRepository()
     subj = repo.get_subject_by_id(subject_id)
     if not subj:
@@ -38,7 +41,7 @@ def get_subject(subject_id: str = Path(..., description="Subject ID")):
     return subj
 
 @router.patch("/{subject_id}", response_model=SubjectResponse)
-def update_subject(subject_id: str, req: SubjectUpdateRequest):
+def update_subject(subject_id: str, req: SubjectUpdateRequest, user: UserInfo = Depends(get_current_user)):
     repo = SubjectRepository()
     if not repo.get_subject_by_id(subject_id):
         raise HTTPException(status_code=404, detail=f"Subject '{subject_id}' not found")
@@ -51,7 +54,7 @@ def update_subject(subject_id: str, req: SubjectUpdateRequest):
     return subj
 
 @router.delete("/{subject_id}")
-def delete_subject(subject_id: str):
+def delete_subject(subject_id: str, user: UserInfo = Depends(get_current_user)):
     repo = SubjectRepository()
     if not repo.delete_subject(subject_id):
         raise HTTPException(status_code=404, detail=f"Subject '{subject_id}' not found or not deleted")
@@ -62,7 +65,7 @@ def delete_subject(subject_id: str):
 
 # Grade-Subject linkage
 @router.post("/link", status_code=204)
-def link_grade_subject(req: GradeSubjectLinkRequest):
+def link_grade_subject(req: GradeSubjectLinkRequest, user: UserInfo = Depends(get_current_user)):
     gs = GradeSubjectRepository()
     gs.create_indexes()
     # Validate grade and subject exist
@@ -76,13 +79,13 @@ def link_grade_subject(req: GradeSubjectLinkRequest):
         raise HTTPException(status_code=500, detail="Failed to link grade and subject")
 
 @router.post("/unlink", status_code=204)
-def unlink_grade_subject(req: GradeSubjectLinkRequest):
+def unlink_grade_subject(req: GradeSubjectLinkRequest, user: UserInfo = Depends(get_current_user)):
     gs = GradeSubjectRepository()
     if not gs.unlink(req.grade_id, req.subject_id):
         raise HTTPException(status_code=404, detail="Link not found")
 
 @router.get("/by-grade/{grade_id}")
-def get_subjects_by_grade(grade_id: str):
+def get_subjects_by_grade(grade_id: str, user: UserInfo = Depends(get_current_user)):
     gs = GradeSubjectRepository()
     subj_ids = gs.get_subjects_by_grade(grade_id)
     subj_repo = SubjectRepository()
@@ -90,7 +93,7 @@ def get_subjects_by_grade(grade_id: str):
     return {"grade_id": grade_id, "subjects": [s for s in subjects if s]}
 
 @router.get("/by-subject/{subject_id}")
-def get_grades_by_subject(subject_id: str):
+def get_grades_by_subject(subject_id: str, user: UserInfo = Depends(get_current_user)):
     gs = GradeSubjectRepository()
     grade_ids = gs.get_grades_by_subject(subject_id)
     from app.repositories.grade_repository import GradeRepository

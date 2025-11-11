@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Path, Query
+from fastapi import APIRouter, HTTPException, Path, Query, Depends
 from typing import List, Optional
 from app.repositories.chapter_repository import ChapterRepository
 from app.repositories.lesson_repository import LessonRepository
@@ -7,11 +7,14 @@ from app.models.crud_model import (
     ChapterCreateRequest, ChapterUpdateRequest, ChapterResponse, DeleteResponse
 )
 from app.services.indexer import _compute_chapter_id
+from app.core.auth import get_current_user, UserInfo
+from app.core.logger import get_logger
 
 router = APIRouter()
+logger = get_logger(__name__)
 
 @router.post("", response_model=ChapterResponse, status_code=201)
-def create_chapter(req: ChapterCreateRequest):
+def create_chapter(req: ChapterCreateRequest, user: UserInfo = Depends(get_current_user)):
     """Create a new chapter"""
     chapter_repo = ChapterRepository()
     book_repo = BookRepository()
@@ -41,7 +44,7 @@ def create_chapter(req: ChapterCreateRequest):
     return chapter
 
 @router.get("", response_model=List[ChapterResponse])
-def get_all_chapters(book_id: Optional[str] = Query(None, description="Filter by book_id")):
+def get_all_chapters(book_id: Optional[str] = Query(None, description="Filter by book_id"), user: UserInfo = Depends(get_current_user)):
     """Get all chapters, optionally filtered by book_id"""
     chapter_repo = ChapterRepository()
     
@@ -59,7 +62,7 @@ def get_all_chapters(book_id: Optional[str] = Query(None, description="Filter by
     return chapters
 
 @router.get("/{chapter_id}", response_model=ChapterResponse)
-def get_chapter(chapter_id: str = Path(..., description="Chapter ID")):
+def get_chapter(chapter_id: str = Path(..., description="Chapter ID"), user: UserInfo = Depends(get_current_user)):
     """Get chapter by ID"""
     chapter_repo = ChapterRepository()
     chapter = chapter_repo.get_chapter_by_id(chapter_id)
@@ -76,7 +79,8 @@ def get_chapter(chapter_id: str = Path(..., description="Chapter ID")):
 @router.put("/{chapter_id}", response_model=ChapterResponse)
 def update_chapter(
     chapter_id: str = Path(..., description="Chapter ID"),
-    req: ChapterUpdateRequest = None
+    req: ChapterUpdateRequest = None,
+    user: UserInfo = Depends(get_current_user)
 ):
     """Update chapter by ID"""
     chapter_repo = ChapterRepository()
@@ -104,7 +108,7 @@ def update_chapter(
     return chapter
 
 @router.delete("/{chapter_id}", response_model=DeleteResponse)
-def delete_chapter(chapter_id: str = Path(..., description="Chapter ID")):
+def delete_chapter(chapter_id: str = Path(..., description="Chapter ID"), user: UserInfo = Depends(get_current_user)):
     """Delete chapter by ID (also deletes related lessons)"""
     chapter_repo = ChapterRepository()
     lesson_repo = LessonRepository()
