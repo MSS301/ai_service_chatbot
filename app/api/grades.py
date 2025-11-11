@@ -1,12 +1,15 @@
-from fastapi import APIRouter, HTTPException, Path
+from fastapi import APIRouter, HTTPException, Path, Depends
 from typing import List
 from app.repositories.grade_repository import GradeRepository
 from app.repositories.book_repository import BookRepository
 from app.models.crud_model import (
     GradeCreateRequest, GradeUpdateRequest, GradeResponse, DeleteResponse
 )
+from app.core.auth import get_current_user, UserInfo
+from app.core.logger import get_logger
 
 router = APIRouter()
+logger = get_logger(__name__)
 
 def _compute_grade_id(grade_number: int) -> str:
     """Compute grade_id from grade_number"""
@@ -15,7 +18,7 @@ def _compute_grade_id(grade_number: int) -> str:
     return hashlib.md5(key.encode()).hexdigest()
 
 @router.post("", response_model=GradeResponse, status_code=201)
-def create_grade(req: GradeCreateRequest):
+def create_grade(req: GradeCreateRequest, user: UserInfo = Depends(get_current_user)):
     """Create a new grade"""
     grade_repo = GradeRepository()
     grade_id = _compute_grade_id(req.grade_number)
@@ -43,7 +46,7 @@ def create_grade(req: GradeCreateRequest):
     return grade
 
 @router.get("", response_model=List[GradeResponse])
-def get_all_grades():
+def get_all_grades(user: UserInfo = Depends(get_current_user)):
     """Get all grades"""
     grade_repo = GradeRepository()
     grades = grade_repo.get_all_grades()
@@ -56,7 +59,7 @@ def get_all_grades():
     return grades
 
 @router.get("/{grade_id}/books")
-def get_books_by_grade(grade_id: str = Path(..., description="Grade ID")):
+def get_books_by_grade(grade_id: str = Path(..., description="Grade ID"), user: UserInfo = Depends(get_current_user)):
     """
     📚 Lấy danh sách tất cả sách thuộc grade này
     """
@@ -85,7 +88,7 @@ def get_books_by_grade(grade_id: str = Path(..., description="Grade ID")):
     }
 
 @router.get("/{grade_id}", response_model=GradeResponse)
-def get_grade(grade_id: str = Path(..., description="Grade ID")):
+def get_grade(grade_id: str = Path(..., description="Grade ID"), user: UserInfo = Depends(get_current_user)):
     """Get grade by ID"""
     grade_repo = GradeRepository()
     grade = grade_repo.get_grade_by_id(grade_id)
@@ -100,7 +103,7 @@ def get_grade(grade_id: str = Path(..., description="Grade ID")):
     return grade
 
 @router.get("/number/{grade_number}", response_model=GradeResponse)
-def get_grade_by_number(grade_number: int = Path(..., description="Grade number (e.g., 12)")):
+def get_grade_by_number(grade_number: int = Path(..., description="Grade number (e.g., 12)"), user: UserInfo = Depends(get_current_user)):
     """Get grade by grade number"""
     grade_repo = GradeRepository()
     grade = grade_repo.get_grade_by_number(grade_number)
@@ -117,7 +120,8 @@ def get_grade_by_number(grade_number: int = Path(..., description="Grade number 
 @router.put("/{grade_id}", response_model=GradeResponse)
 def update_grade(
     grade_id: str = Path(..., description="Grade ID"),
-    req: GradeUpdateRequest = None
+    req: GradeUpdateRequest = None,
+    user: UserInfo = Depends(get_current_user)
 ):
     """Update grade by ID"""
     grade_repo = GradeRepository()
@@ -151,7 +155,7 @@ def update_grade(
     return grade
 
 @router.delete("/{grade_id}", response_model=DeleteResponse)
-def delete_grade(grade_id: str = Path(..., description="Grade ID")):
+def delete_grade(grade_id: str = Path(..., description="Grade ID"), user: UserInfo = Depends(get_current_user)):
     """Delete grade by ID (WARNING: This does not delete related books)"""
     grade_repo = GradeRepository()
     book_repo = BookRepository()
