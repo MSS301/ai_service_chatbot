@@ -48,6 +48,26 @@ class ContentRepository:
         res = self.collection.update_one({"content_id": content_id}, update)
         return res.modified_count > 0
 
+    def save_slidesgpt(self, content_id: str, slides_info: Dict, created_by: Optional[str] = None) -> bool:
+        """
+        Save SlidesGPT result (id, embed, download) into content doc.
+        """
+        payload: Dict = {
+            "slidesgpt": {
+                **slides_info,
+                "created_at": datetime.now(timezone.utc),
+            },
+            "updated_at": datetime.now(timezone.utc),
+        }
+        if created_by:
+            payload["slidesgpt"]["created_by"] = created_by
+
+        res = self.collection.update_one(
+            {"content_id": content_id},
+            {"$set": payload}
+        )
+        return res.modified_count > 0
+
     def list_by_scope(self, grade_id: str, book_id: str, chapter_id: str, lesson_id: str) -> List[Dict]:
         return list(self.collection.find(
             {"grade_id": grade_id, "book_id": book_id, "chapter_id": chapter_id, "lesson_id": lesson_id},
