@@ -15,3 +15,7 @@ tqdm
 requests
 sentence-transformers
 pymongo
+python-pptx
+pyyaml
+python-multipart
+

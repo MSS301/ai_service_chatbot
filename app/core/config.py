@@ -27,3 +27,7 @@ INDEX_PATH = os.path.join(DATA_DIR, "index.faiss")
 # Slides generation (external) - used to build embed/download links in RAG response
 SLIDES_BASE_URL = os.getenv("SLIDES_BASE_URL", "https://api.slidesgpt.com")
 SLIDESGPT_API_KEY = os.getenv("SLIDESGPT_API_KEY", "")
+
+# Slides template (local PPTX)
+SLIDES_TEMPLATE_DIR = os.getenv("SLIDES_TEMPLATE_DIR", "app/assets/slides/templates")
+SLIDES_DEFAULT_THEME = os.getenv("SLIDES_DEFAULT_THEME", "default")

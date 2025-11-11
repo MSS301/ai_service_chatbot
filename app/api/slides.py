@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Response
 from app.models.rag_model import (
     SlidesGPTRequest, SlidesGPTResponse,
     TemplateSlidesRequest, TemplateSlidesResponse
@@ -7,6 +7,7 @@ from app.core.config import SLIDES_BASE_URL, SLIDESGPT_API_KEY, OPENAI_API_KEY
 import requests, uuid, os
 from pydantic import BaseModel
 from app.repositories.content_repository import ContentRepository
+from app.repositories.template_repository import SlideTemplateRepository
 from openai import OpenAI
 import re
 import yaml
@@ -125,6 +126,7 @@ class TemplateYAMLFromContentRequest(BaseModel):
 
 
 class TemplateYAMLResponse(BaseModel):
+    content_yaml_id: str
     yaml: str
 
 
@@ -226,7 +228,157 @@ def generate_template_yaml_from_content(req: TemplateYAMLFromContentRequest):
         # Nếu parse lỗi, vẫn lưu nguyên văn đã strip codefence
         pass
 
-    # Lưu vào DB vào field content_yaml
-    crepo.save_content_yaml(req.content_id, yaml_text, created_by=req.created_by)
-    return {"yaml": yaml_text}
+    # Tạo record mới trong collection content_yamls
+    content_yaml_id = crepo.insert_content_yaml({
+        "content_id": req.content_id,
+        "yaml": yaml_text,
+        "created_by": req.created_by,
+    })
+    return {"content_yaml_id": content_yaml_id, "yaml": yaml_text}
+
+
+class ContentYAMLUpdateRequest(BaseModel):
+    yaml: str
+    updated_by: str | None = None
+
+
+class ContentYAMLResponse(BaseModel):
+    content_yaml_id: str
+    content_id: str
+    yaml: str
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+@router.get("/template/yaml/{content_yaml_id}", response_model=ContentYAMLResponse)
+def get_content_yaml(content_yaml_id: str):
+    crepo = ContentRepository()
+    doc = crepo.get_content_yaml_by_id(content_yaml_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="content_yaml_id not found")
+    # Convert datetime to str
+    for k in ("created_at", "updated_at"):
+        if isinstance(doc.get(k), (str, type(None))):
+            continue
+        if doc.get(k):
+            doc[k] = str(doc[k])
+    return doc
+
+
+@router.get("/template/yaml/by-content/{content_id}", response_model=list[ContentYAMLResponse])
+def list_content_yaml_by_content(content_id: str):
+    crepo = ContentRepository()
+    docs = crepo.list_content_yaml_by_content(content_id)
+    for doc in docs:
+        for k in ("created_at", "updated_at"):
+            if isinstance(doc.get(k), (str, type(None))):
+                continue
+            if doc.get(k):
+                doc[k] = str(doc[k])
+    return docs
+
+
+@router.put("/template/yaml/{content_yaml_id}", response_model=ContentYAMLResponse)
+def update_content_yaml(content_yaml_id: str, req: ContentYAMLUpdateRequest):
+    crepo = ContentRepository()
+    ok = crepo.update_content_yaml(content_yaml_id, req.yaml, updated_by=req.updated_by)
+    if not ok:
+        raise HTTPException(status_code=404, detail="content_yaml_id not found or not modified")
+    # return updated doc
+    return get_content_yaml(content_yaml_id)
+
+
+@router.delete("/template/yaml/{content_yaml_id}")
+def delete_content_yaml(content_yaml_id: str):
+    crepo = ContentRepository()
+    ok = crepo.delete_content_yaml(content_yaml_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="content_yaml_id not found")
+    return {"status": "deleted", "content_yaml_id": content_yaml_id}
+
+
+# ===================== Slide Templates (stored in DB via GridFS) =====================
+
+class TemplateMetaResponse(BaseModel):
+    template_id: str
+    name: str
+    filename: str
+    content_type: str
+    size: int | None = None
+    description: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+@router.post("/templates", response_model=TemplateMetaResponse)
+async def upload_template(
+    name: str = Form(...),
+    description: str | None = Form(None),
+    file: UploadFile = File(...),
+):
+    if not file.filename or not file.content_type:
+        raise HTTPException(status_code=400, detail="Invalid file")
+    data = await file.read()
+    trepo = SlideTemplateRepository()
+    trepo.create_indexes()
+    template_id = trepo.insert_template(
+        name=name,
+        filename=file.filename,
+        content_type=file.content_type,
+        data=data,
+        description=description,
+    )
+    doc = trepo.get_template_by_id(template_id)
+    # Convert datetime to str
+    for k in ("created_at", "updated_at"):
+        if doc.get(k):
+            doc[k] = str(doc[k])
+    return doc
+
+
+@router.get("/templates", response_model=list[TemplateMetaResponse])
+def list_templates():
+    trepo = SlideTemplateRepository()
+    items = trepo.list_templates()
+    for it in items:
+        for k in ("created_at", "updated_at"):
+            if it.get(k):
+                it[k] = str(it[k])
+    return items
+
+
+@router.get("/templates/{template_id}", response_model=TemplateMetaResponse)
+def get_template(template_id: str):
+    trepo = SlideTemplateRepository()
+    doc = trepo.get_template_by_id(template_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="template_id not found")
+    for k in ("created_at", "updated_at"):
+        if doc.get(k):
+            doc[k] = str(doc[k])
+    return doc
+
+
+@router.get("/templates/{template_id}/download")
+def download_template(template_id: str):
+    trepo = SlideTemplateRepository()
+    meta = trepo.get_template_by_id(template_id)
+    if not meta:
+        raise HTTPException(status_code=404, detail="template_id not found")
+    data = trepo.download_template_file(template_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail="template file not found")
+    headers = {
+        "Content-Disposition": f'attachment; filename="{meta.get("filename", "template.pptx")}"'
+    }
+    return Response(content=data, media_type=meta.get("content_type", "application/vnd.openxmlformats-officedocument.presentationml.presentation"), headers=headers)
+
+
+@router.delete("/templates/{template_id}")
+def delete_template(template_id: str):
+    trepo = SlideTemplateRepository()
+    ok = trepo.delete_template(template_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="template_id not found")
+    return {"status": "deleted", "template_id": template_id}
 

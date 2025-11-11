@@ -14,14 +14,22 @@ class ContentRepository:
     def __init__(self):
         self.db = get_database()
         self.collection = self.db.contents
+        self.yaml_collection = self.db.content_yamls
 
     def create_indexes(self):
         self.collection.create_index("content_id", unique=True)
         self.collection.create_index([("grade_id", 1), ("book_id", 1), ("chapter_id", 1), ("lesson_id", 1)])
         self.collection.create_index("subject_id")
+        # content_yamls
+        self.yaml_collection.create_index("content_yaml_id", unique=True)
+        self.yaml_collection.create_index("content_id")
 
     @staticmethod
     def new_content_id() -> str:
+        return uuid.uuid4().hex
+
+    @staticmethod
+    def new_content_yaml_id() -> str:
         return uuid.uuid4().hex
 
     def insert_content(self, doc: Dict) -> str:
@@ -33,6 +41,40 @@ class ContentRepository:
 
     def get_by_id(self, content_id: str) -> Optional[Dict]:
         return self.collection.find_one({"content_id": content_id}, {"_id": 0})
+
+    # ----- Content YAML CRUD (separate collection) -----
+    def insert_content_yaml(self, doc: Dict) -> str:
+        now = datetime.now(timezone.utc)
+        doc.setdefault("created_at", now)
+        doc.setdefault("updated_at", now)
+        if "content_yaml_id" not in doc:
+            doc["content_yaml_id"] = self.new_content_yaml_id()
+        self.yaml_collection.insert_one(doc)
+        return doc["content_yaml_id"]
+
+    def get_content_yaml_by_id(self, content_yaml_id: str) -> Optional[Dict]:
+        return self.yaml_collection.find_one({"content_yaml_id": content_yaml_id}, {"_id": 0})
+
+    def list_content_yaml_by_content(self, content_id: str) -> List[Dict]:
+        return list(self.yaml_collection.find({"content_id": content_id}, {"_id": 0}).sort("updated_at", -1))
+
+    def update_content_yaml(self, content_yaml_id: str, yaml_text: str, updated_by: Optional[str] = None, meta: Optional[Dict] = None) -> bool:
+        update = {
+            "$set": {
+                "yaml": yaml_text,
+                "updated_at": datetime.now(timezone.utc),
+            }
+        }
+        if updated_by:
+            update["$set"]["updated_by"] = updated_by
+        if meta:
+            update["$set"].update(meta)
+        res = self.yaml_collection.update_one({"content_yaml_id": content_yaml_id}, update)
+        return res.modified_count > 0
+
+    def delete_content_yaml(self, content_yaml_id: str) -> bool:
+        res = self.yaml_collection.delete_one({"content_yaml_id": content_yaml_id})
+        return res.deleted_count > 0
 
     def update_content(self, content_id: str, new_text: str, outline: Optional[Dict] = None, meta: Optional[Dict] = None) -> bool:
         update = {
