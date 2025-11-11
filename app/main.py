@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from .api import ingest, rag, books, chapters, lessons, grades, subjects, slides
 from .core.logger import get_logger
@@ -43,17 +44,34 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-app.include_router(ingest.router, prefix="/api/ai_service/ingestion", tags=["Ingestion"])
-app.include_router(rag.router, prefix="/api/ai_service/rag", tags=["RAG Query"])
-app.include_router(grades.router, prefix="/api/ai_service/grades", tags=["Grades"])
-app.include_router(books.router, prefix="/api/ai_service/books", tags=["Books"])
-app.include_router(chapters.router, prefix="/api/ai_service/chapters", tags=["Chapters"])
-app.include_router(lessons.router, prefix="/api/ai_service/lessons", tags=["Lessons"])
-app.include_router(subjects.router, prefix="/api/ai_service/subjects", tags=["Subjects"])
-app.include_router(slides.router, prefix="/api/ai_service/slides", tags=["Slides"])
+# CORS Configuration
+# Allow requests from API Gateway (localhost:8080) and other common origins
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:8080",  # API Gateway
+        "http://127.0.0.1:8080",  # API Gateway (alternative)
+        "http://localhost:3000",  # Frontend (if applicable)
+        "http://localhost:5173",  # Vite dev server (if applicable)
+        "*"  # Allow all origins in development (remove in production)
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],  # Allow all HTTP methods
+    allow_headers=["*"],  # Allow all headers (including Authorization, X-User-Id, etc.)
+    expose_headers=["*"],  # Expose all headers in response
+)
+
+app.include_router(ingest.router, prefix="/ai_service/ingestion", tags=["Ingestion"])
+app.include_router(rag.router, prefix="/ai_service/rag", tags=["RAG Query"])
+app.include_router(grades.router, prefix="/ai_service/grades", tags=["Grades"])
+app.include_router(books.router, prefix="/ai_service/books", tags=["Books"])
+app.include_router(chapters.router, prefix="/ai_service/chapters", tags=["Chapters"])
+app.include_router(lessons.router, prefix="/ai_service/lessons", tags=["Lessons"])
+app.include_router(subjects.router, prefix="/ai_service/subjects", tags=["Subjects"])
+app.include_router(slides.router, prefix="/ai_service/slides", tags=["Slides"])
 
 logger = get_logger(__name__)
 
-@app.get("/api/ai_service/", tags=["Health"])
+@app.get("/ai_service/", tags=["Health"])
 def health_check():
     return {"status": "ok", "message": "AI Service Chatbot is running 🚀"}
