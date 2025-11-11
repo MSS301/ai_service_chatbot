@@ -1,4 +1,5 @@
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Response
+from typing import Any, Dict, List, Optional
 from app.models.rag_model import (
     SlidesGPTRequest, SlidesGPTResponse,
     TemplateSlidesRequest, TemplateSlidesResponse
@@ -11,6 +12,10 @@ from app.repositories.template_repository import SlideTemplateRepository
 from openai import OpenAI
 import re
 import yaml
+from io import BytesIO
+from pptx import Presentation
+from pptx.enum.shapes import PP_PLACEHOLDER
+from pptx.util import Pt
 
 router = APIRouter()
 
@@ -148,22 +153,32 @@ def generate_template_yaml_from_content(req: TemplateYAMLFromContentRequest):
         raise HTTPException(status_code=500, detail="OPENAI_API_KEY not configured")
 
     client = OpenAI(api_key=OPENAI_API_KEY)
-    system_msg = "Chỉ trả về YAML hợp lệ theo schema yêu cầu, không giải thích, không code block."
+    system_msg = (
+        "Chỉ trả về YAML hợp lệ, KHÔNG kèm giải thích, KHÔNG code fence. "
+        "Yêu cầu 5–10 slide. Mỗi phần tử có các khóa: slide (số thứ tự), title (ngắn gọn), content (đoạn nhiều dòng)."
+    )
     user_msg = (
         "Chuyển nội dung sau thành YAML tạo slide theo schema:\n\n"
         "slides:\n"
-        "  - layout: title_content\n"
-        "    title: \"Tiêu đề\"\n"
-        "    bullets:\n"
-        "      - \"Bullet 1\"\n"
-        "      - \"  - Sub-bullet\"\n"
+        "  - slide: 1\n"
+        "    title: \"Tiêu đề ngắn\"\n"
+        "    content: |\n"
+        "      Dòng 1\n"
+        "      Dòng 2\n"
+        "  - slide: 2\n"
+        "    title: \"Tiêu đề khác\"\n"
+        "    content: |\n"
+        "      Ý chính 1\n"
+        "      Ý chính 2\n"
         "meta:\n"
         "  deck_title: \"Bài giảng\"\n"
         "  author: \"\"\n\n"
-        "YÊU CẦU:\n"
-        "- layout mặc định: title_content\n"
-        "- Sub-bullet bắt đầu bằng hai space + '- '\n"
-        "- Giữ tiếng Việt, rõ ràng, không dùng code block\n\n"
+        "YÊU CẦU RÀNG BUỘC:\n"
+        "- Tổng số slide: 5 đến 10.\n"
+        "- Mỗi phần tử trong slides PHẢI có: slide (số thứ tự 1..n), title (3–8 từ), content (3–7 dòng văn bản, mỗi ý một dòng).\n"
+        "- content sử dụng block scalar (|) với mỗi dòng cho một gạch đầu dòng; không dùng list lồng nhau.\n"
+        "- Chỉ trả về YAML thuần, không code fence.\n"
+        "- Ngôn ngữ: tiếng Việt.\n\n"
         "Nội dung cần chuyển:\n"
         f"{content_text}\n"
     )
@@ -179,47 +194,37 @@ def generate_template_yaml_from_content(req: TemplateYAMLFromContentRequest):
     # Loại bỏ code fences nếu có
     yaml_text = re.sub(r"^```[a-zA-Z]*\s*|\s*```$", "", yaml_text.strip(), flags=re.MULTILINE)
 
-    # Chuẩn hoá bullets về danh sách phẳng các chuỗi (sub-bullet dùng '  - ')
-    def flatten_bullets(node, level=0):
-        lines = []
+    def flatten_bullets(node):
+        result = []
         if isinstance(node, list):
-            for it in node:
-                lines.extend(flatten_bullets(it, level))
+            for item in node:
+                result.extend(flatten_bullets(item))
         elif isinstance(node, dict):
-            # Nếu LLM trả dict {text, children} không mong muốn -> chuyển text và duyệt children
-            text = node.get("text")
-            children = node.get("children")
-            if text is not None:
-                prefix = ("  - " * level) if level > 0 else ""
-                lines.append(f"{prefix}{str(text).strip()}")
-            if children:
-                lines.extend(flatten_bullets(children, level + 1))
+            for key, value in node.items():
+                result.append(str(key).strip())
+                result.extend(flatten_bullets(value))
         elif isinstance(node, str):
-            s = node.strip()
-            # Giữ nguyên nếu đã có sub-bullet tiền tố
-            if level == 0:
-                lines.append(s)
-            else:
-                prefix = "  - " * level
-                # nếu đã có tiền tố, giữ nguyên
-                if re.match(r"^\s{2}-\s+", s):
-                    lines.append(s)
-                else:
-                    lines.append(f"{prefix}{s}")
+            result.append(re.sub(r"^\s*-\s+", "", node).strip())
         else:
-            # Các kiểu khác -> ép thành chuỗi
-            val = str(node)
-            prefix = ("  - " * level) if level > 0 else ""
-            lines.append(f"{prefix}{val}")
-        return lines
+            result.append(str(node).strip())
+        return result
 
     try:
         data = yaml.safe_load(yaml_text) or {}
         slides = data.get("slides", [])
-        for s in slides:
-            bullets = s.get("bullets")
-            if bullets is not None:
-                s["bullets"] = flatten_bullets(bullets, level=0)
+        normalized = []
+        for idx, s in enumerate(slides, start=1):
+            if "content" in s:
+                content_text = str(s.get("content", "")).strip()
+            else:
+                bullets = flatten_bullets(s.get("bullets", []))
+                content_text = "\n".join([line for line in bullets if line])
+            normalized.append({
+                "slide": s.get("slide", idx),
+                "title": s.get("title", f"Slide {idx}"),
+                "content": content_text
+            })
+        data["slides"] = normalized
         # Bảo toàn meta nếu có, nếu không thì thêm khung trống
         if "meta" not in data:
             data["meta"] = {"deck_title": "Bài giảng", "author": ""}
@@ -381,4 +386,493 @@ def delete_template(template_id: str):
     if not ok:
         raise HTTPException(status_code=404, detail="template_id not found")
     return {"status": "deleted", "template_id": template_id}
+
+
+# ===================== Template Inspection =====================
+
+class PlaceholderInfo(BaseModel):
+    name: str | None = None
+    shape_type: str | None = None
+    placeholder_type: str | None = None
+    has_text: bool = False
+    idx: int | None = None
+
+
+class LayoutInfo(BaseModel):
+    index: int
+    name: str | None = None
+    placeholders: list[PlaceholderInfo]
+
+
+class TemplateInspectResponse(BaseModel):
+    template_id: str
+    filename: str | None = None
+    layouts: list[LayoutInfo]
+
+
+@router.get("/templates/{template_id}/inspect", response_model=TemplateInspectResponse)
+def inspect_template(template_id: str):
+    trepo = SlideTemplateRepository()
+    meta = trepo.get_template_by_id(template_id)
+    if not meta:
+        raise HTTPException(status_code=404, detail="template_id not found")
+    data = trepo.download_template_file(template_id)
+    if not data:
+        raise HTTPException(status_code=404, detail="template file not found")
+
+    prs = Presentation(BytesIO(data))
+    layouts: list[LayoutInfo] = []
+    for idx, layout in enumerate(prs.slide_layouts):
+        placeholders: list[PlaceholderInfo] = []
+        for shp in layout.shapes:
+            info = PlaceholderInfo(
+                name=getattr(shp, "name", None),
+                shape_type=str(getattr(shp, "shape_type", None)),
+                placeholder_type=None,
+                has_text=getattr(shp, "has_text_frame", False),
+                idx=getattr(shp, "placeholder_format", None).idx if hasattr(shp, "placeholder_format") else None,
+            )
+            if hasattr(shp, "placeholder_format"):
+                try:
+                    ph_type = shp.placeholder_format.type
+                    info.placeholder_type = str(ph_type)
+                except Exception:
+                    pass
+            placeholders.append(info)
+        layouts.append(LayoutInfo(
+            index=idx,
+            name=getattr(layout, "name", None),
+            placeholders=placeholders
+        ))
+    return TemplateInspectResponse(
+        template_id=template_id,
+        filename=meta.get("filename"),
+        layouts=layouts,
+    )
+# ===================== Export PPTX from content_yaml_id + template_id =====================
+
+class ExportPPTXRequest(BaseModel):
+    content_yaml_id: str
+    template_id: str
+    filename: str | None = None
+    overwrite_existing: bool | None = True
+
+
+@router.post("/template/export")
+def export_pptx(req: ExportPPTXRequest):
+    """
+    Tạo file PPTX từ content_yaml_id và template_id lưu trong DB.
+    """
+    # Load YAML
+    crepo = ContentRepository()
+    yaml_doc = crepo.get_content_yaml_by_id(req.content_yaml_id)
+    if not yaml_doc:
+        raise HTTPException(status_code=404, detail="content_yaml_id not found")
+    yaml_text = yaml_doc.get("yaml", "")
+    if not yaml_text:
+        raise HTTPException(status_code=400, detail="YAML is empty for this content_yaml_id")
+
+    def _try_load_yaml(text: str):
+        try:
+            return yaml.safe_load(text) or {}
+        except Exception:
+            return None
+
+    data = _try_load_yaml(yaml_text)
+    if data is None:
+        # Fallback repair: quote all bullet items to avoid YAML nested block parsing issues
+        lines = yaml_text.splitlines()
+        repaired = []
+        in_bullets = False
+        bullets_indent = None
+        for ln in lines:
+            # Track entering bullets section
+            m_bul = re.match(r'^(\s*)bullets\s*:\s*$', ln)
+            if m_bul:
+                in_bullets = True
+                bullets_indent = len(m_bul.group(1))
+                repaired.append(ln)
+                continue
+            # If we leave bullets section when indentation decreases and line not blank
+            if in_bullets:
+                if ln.strip() == "":
+                    repaired.append(ln)
+                    continue
+                current_indent = len(ln) - len(ln.lstrip(' '))
+                if current_indent <= bullets_indent and not ln.lstrip().startswith('-'):
+                    in_bullets = False
+                # For items under bullets:, ensure quoted strings
+                if in_bullets and re.match(r'^\s*-\s+.*$', ln):
+                    # Extract text after "- "
+                    prefix, text = re.match(r'^(\s*-\s+)(.*)$', ln).groups()
+                    text = text.strip()
+                    # If already quoted, keep; else quote
+                    if not (text.startswith('"') and text.endswith('"')) and not (text.startswith("'") and text.endswith("'")):
+                        text = text.replace('"', '\\"')
+                        ln = f'{prefix}"{text}"'
+                    repaired.append(ln)
+                    continue
+            repaired.append(ln)
+        yaml_text_repaired = "\n".join(repaired)
+        data = _try_load_yaml(yaml_text_repaired)
+        if data is None:
+            # Second fallback: normalize nested bullet indentation inside bullets: block
+            normalized = []
+            in_bullets = False
+            bullets_indent = None
+            bullet_item_indent = None
+            for ln in repaired:
+                m_bul = re.match(r'^(\s*)bullets\s*:\s*$', ln)
+                if m_bul:
+                    in_bullets = True
+                    bullets_indent = len(m_bul.group(1))
+                    bullet_item_indent = None
+                    normalized.append(ln)
+                    continue
+                if in_bullets:
+                    if ln.strip() == "":
+                        normalized.append(ln)
+                        continue
+                    current_indent = len(ln) - len(ln.lstrip(' '))
+                    # Leaving bullets section
+                    if current_indent <= bullets_indent and not ln.lstrip().startswith('-'):
+                        in_bullets = False
+                        bullets_indent = None
+                        bullet_item_indent = None
+                        normalized.append(ln)
+                        continue
+                    # Track first bullet item's indent
+                    if re.match(r'^\s*-\s+', ln) and bullet_item_indent is None:
+                        bullet_item_indent = len(re.match(r'^(\s*)-\s+', ln).group(1))
+                        normalized.append(ln)
+                        continue
+                    # If a nested list item like:        - "  - text"
+                    if bullet_item_indent is not None and re.match(r'^\s+-\s+"  - ', ln):
+                        ln = ' ' * bullet_item_indent + ln.lstrip()
+                        normalized.append(ln)
+                        continue
+                normalized.append(ln)
+        yaml_text_normalized = "\n".join(normalized)
+        data = _try_load_yaml(yaml_text_normalized)
+        if data is None:
+            def parse_relaxed(text: str) -> Dict[str, Any]:
+                slides: List[Dict[str, Any]] = []
+                meta: Dict[str, Any] = {}
+                current: Optional[Dict[str, Any]] = None
+                section = None
+                bullet_mode = False
+                bullet_indent = None
+
+                def strip_quotes(val: str) -> str:
+                    v = val.strip()
+                    if len(v) >= 2 and ((v.startswith('"') and v.endswith('"')) or (v.startswith("'") and v.endswith("'"))):
+                        return v[1:-1]
+                    return v
+
+                lines = text.splitlines()
+                for raw in lines:
+                    line = raw.rstrip('\r\n')
+                    stripped = line.strip()
+                    if not stripped:
+                        continue
+                    if stripped.startswith("#"):
+                        continue
+
+                    if re.match(r'^\s*slides\s*:\s*$', line):
+                        section = "slides"
+                        current = None
+                        bullet_mode = False
+                        bullet_indent = None
+                        continue
+                    if re.match(r'^\s*meta\s*:\s*$', line):
+                        section = "meta"
+                        current = None
+                        bullet_mode = False
+                        bullet_indent = None
+                        continue
+
+                    if section == "slides":
+                        if bullet_mode:
+                            m_bullet = re.match(r'^(\s*)-\s+(.*)$', line)
+                            if m_bullet:
+                                text_val = strip_quotes(m_bullet.group(2))
+                                if current is not None:
+                                    current.setdefault("bullets", []).append(text_val)
+                                if bullet_indent is None:
+                                    bullet_indent = len(m_bullet.group(1))
+                                continue
+                            else:
+                                bullet_mode = False
+                                bullet_indent = None
+                                # fall through to process current line
+
+                        m_layout = re.match(r'^\s*-\s*layout\s*:\s*(.+)$', line)
+                        if m_layout:
+                            current = {
+                                "layout": strip_quotes(m_layout.group(1)),
+                                "title": "",
+                                "bullets": []
+                            }
+                            slides.append(current)
+                            continue
+
+                        if current is None:
+                            continue
+
+                        m_title = re.match(r'^\s*title\s*:\s*(.+)$', line)
+                        if m_title:
+                            current["title"] = strip_quotes(m_title.group(1))
+                            continue
+
+                        if re.match(r'^\s*bullets\s*:\s*$', line):
+                            bullet_mode = True
+                            bullet_indent = None
+                            continue
+
+                        # Any other property inside slide (ignored)
+                        continue
+
+                    if section == "meta":
+                        m_kv = re.match(r'^\s*([A-Za-z0-9_]+)\s*:\s*(.+)$', line)
+                        if m_kv:
+                            meta[m_kv.group(1)] = strip_quotes(m_kv.group(2))
+                        continue
+
+                if not slides:
+                    raise ValueError("No slides parsed in relaxed mode")
+                if "deck_title" not in meta:
+                    meta["deck_title"] = "Bài giảng"
+                if "author" not in meta:
+                    meta["author"] = ""
+                return {"slides": slides, "meta": meta}
+
+            try:
+                data = parse_relaxed(yaml_text)
+            except Exception:
+                raise HTTPException(status_code=400, detail="Invalid YAML: could not parse after repair")
+
+    # Load template PPTX bytes
+    trepo = SlideTemplateRepository()
+    meta = trepo.get_template_by_id(req.template_id)
+    if not meta:
+        raise HTTPException(status_code=404, detail="template_id not found")
+    tpl_bytes = trepo.download_template_file(req.template_id)
+    if not tpl_bytes:
+        raise HTTPException(status_code=404, detail="template file not found")
+
+    # Helper: flatten bullets support both flat strings and nested dict form -> returns list of plain strings
+    def flatten_bullets(bullets):
+        result = []
+        for b in bullets or []:
+            if isinstance(b, str):
+                result.append(re.sub(r"^\s*-\s+", "", b).strip())
+            elif isinstance(b, dict):
+                for key, value in b.items():
+                    result.append(str(key).strip())
+                    result.extend(flatten_bullets(value))
+            else:
+                result.append(str(b).strip())
+        return [line for line in result if line]
+
+    def extract_lines(content: str) -> List[str]:
+        if not content:
+            return []
+        lines = []
+        for raw in content.splitlines():
+            text = raw.strip()
+            if not text:
+                continue
+            text = re.sub(r"^\s*-\s+", "", text)
+            lines.append(text)
+        return lines
+
+    # Build PPTX in-memory
+    prs = Presentation(BytesIO(tpl_bytes))
+
+    def _find_title_body_placeholders(slide):
+        """
+        Ưu tiên theo nội dung mặc định của Canva:
+        - "Add a heading"  -> title
+        - "Add a little bit of body text" -> body
+        Sau đó theo idx (0 = title, 1 = body), rồi theo type, cuối cùng fallback quét shapes.
+        Hỗ trợ trường hợp content là OBJECT (7) thay vì BODY (2).
+        """
+        title_tf = None
+        body_tf = None
+
+        # 0) Ưu tiên dò theo text mặc định
+        for shp in slide.shapes:
+            if not getattr(shp, "has_text_frame", False):
+                continue
+            tf = shp.text_frame
+            if not tf:
+                continue
+            try:
+                current_text = (tf.text or "").strip()
+            except Exception:
+                current_text = ""
+            if current_text == "Add a heading" and title_tf is None:
+                title_tf = tf
+            elif current_text == "Add a little bit of body text" and body_tf is None:
+                body_tf = tf
+            if title_tf is not None and body_tf is not None:
+                return title_tf, body_tf
+
+        # 1) Ưu tiên theo idx
+        for ph in getattr(slide.shapes, "placeholders", []):
+            if not getattr(ph, "has_text_frame", False):
+                continue
+            try:
+                idx = ph.placeholder_format.idx
+            except Exception:
+                idx = None
+            if idx == 0 and title_tf is None:
+                title_tf = ph.text_frame
+            elif idx == 1 and body_tf is None:
+                body_tf = ph.text_frame
+        if title_tf is not None and body_tf is not None:
+            return title_tf, body_tf
+
+        # 2) Theo type (bao quát BODY/OBJECT/SUBTITLE)
+        for ph in getattr(slide.shapes, "placeholders", []):
+            if not getattr(ph, "has_text_frame", False):
+                continue
+            try:
+                ph_type = ph.placeholder_format.type
+            except Exception:
+                continue
+            if title_tf is None and ph_type in (PP_PLACEHOLDER.TITLE, PP_PLACEHOLDER.CENTER_TITLE):
+                title_tf = ph.text_frame
+            if body_tf is None:
+                if ph_type in (PP_PLACEHOLDER.BODY, PP_PLACEHOLDER.SUBTITLE):
+                    body_tf = ph.text_frame
+                elif hasattr(PP_PLACEHOLDER, "OBJECT") and ph_type == getattr(PP_PLACEHOLDER, "OBJECT"):
+                    body_tf = ph.text_frame
+            if title_tf is not None and body_tf is not None:
+                break
+
+        # 3) Fallback: shapes.title và shape đầu tiên có text (không phải title)
+        if title_tf is None:
+            title_shape = getattr(slide.shapes, "title", None)
+            if title_shape and getattr(title_shape, "has_text_frame", False):
+                title_tf = title_shape.text_frame
+        if body_tf is None:
+            for shp in slide.shapes:
+                if not getattr(shp, "has_text_frame", False):
+                    continue
+                if shp == getattr(slide.shapes, "title", None):
+                    continue
+                body_tf = shp.text_frame
+                break
+
+        return title_tf, body_tf
+
+    # Optional cover slide
+    meta_yaml = data.get("meta", {})
+    deck_title = meta_yaml.get("deck_title")
+    author = meta_yaml.get("author")
+    num_existing = len(prs.slides)
+    if deck_title or author:
+        try:
+            if req.overwrite_existing and num_existing >= 1:
+                cover = prs.slides[0]
+            else:
+                cover = prs.slides.add_slide(prs.slide_layouts[0])
+            title_tf, body_tf = _find_title_body_placeholders(cover)
+            if deck_title and title_tf is not None:
+                title_tf.clear()
+                p = title_tf.paragraphs[0]
+                p.text = deck_title
+                p.font.size = Pt(44)
+                p.font.bold = True
+                p.font.name = "Arial"
+            if author and body_tf is not None:
+                body_tf.clear()
+                p = body_tf.paragraphs[0]
+                p.text = author
+                p.font.size = Pt(24)
+                p.font.name = "Arial"
+        except Exception:
+            # If template lacks title slide, skip
+            pass
+
+    for i, s in enumerate(data.get("slides", [])):
+        title = s.get("title", "")
+        if "content" in s:
+            bullet_lines = extract_lines(s.get("content", ""))
+        else:
+            bullet_lines = flatten_bullets(s.get("bullets", []))
+        # Luôn dùng layout "Title and Content" (index 1).
+        # Nếu overwrite_existing=True và đã có sẵn slide ở vị trí i+1, ghi đè vào đó.
+        if req.overwrite_existing and len(prs.slides) > (1 + i):
+            slide = prs.slides[1 + i]
+        else:
+            slide = prs.slides.add_slide(prs.slide_layouts[1])
+
+        # Ưu tiên chọn placeholder theo idx chuẩn của layout này: title=0, body=1
+        title_tf = None
+        body_tf = None
+        try:
+            for ph in slide.shapes.placeholders:
+                try:
+                    idx = ph.placeholder_format.idx
+                except Exception:
+                    idx = None
+                if idx == 0 and getattr(ph, "has_text_frame", False):
+                    title_tf = ph.text_frame
+                elif idx == 1 and getattr(ph, "has_text_frame", False):
+                    body_tf = ph.text_frame
+        except Exception:
+            pass
+        # Nếu chưa thấy, fallback dò theo loại/shape
+        if title_tf is None or body_tf is None:
+            t2, b2 = _find_title_body_placeholders(slide)
+            if title_tf is None:
+                title_tf = t2
+            if body_tf is None:
+                body_tf = b2
+
+        if title_tf is not None:
+            title_tf.clear()
+            p = title_tf.paragraphs[0]
+            p.text = title
+            p.font.size = Pt(36)
+            p.font.bold = True
+            p.font.name = "Arial"
+        if body_tf is not None:
+            body_tf.clear()
+            first = True
+            for text in bullet_lines:
+                if first:
+                    p = body_tf.paragraphs[0]
+                    first = False
+                else:
+                    p = body_tf.add_paragraph()
+                p.text = text
+                p.level = 0
+                p.font.size = Pt(20)
+                p.font.name = "Arial"
+
+    out = BytesIO()
+    prs.save(out)
+    out.seek(0)
+
+    # Tên file: đảm bảo có đuôi .pptx và header theo RFC 5987 để hỗ trợ Unicode
+    filename = req.filename or f"slides_{req.content_yaml_id}.pptx"
+    if not filename.lower().endswith(".pptx"):
+        filename = f"{filename}.pptx"
+    from urllib.parse import quote
+    ascii_fallback = "slides.pptx"
+    try:
+        filename.encode("latin-1")
+        content_disp = f'attachment; filename="{filename}"'
+    except UnicodeEncodeError:
+        # Dùng filename* cho UTF-8 theo RFC 5987 + fallback ascii
+        content_disp = f'attachment; filename="{ascii_fallback}"; filename*=UTF-8\'\'{quote(filename)}'
+    headers = {"Content-Disposition": content_disp}
+    return Response(
+        content=out.read(),
+        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        headers=headers,
+    )
 
