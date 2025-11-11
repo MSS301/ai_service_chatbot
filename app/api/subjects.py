@@ -27,8 +27,29 @@ def create_subject(req: SubjectCreateRequest, user: UserInfo = Depends(get_curre
 
 @router.get("", response_model=List[SubjectResponse])
 def list_subjects(user: UserInfo = Depends(get_current_user)):
-    repo = SubjectRepository()
-    return repo.get_all_subjects()
+    """Get all subjects"""
+    try:
+        logger.info(f"User {user.user_id} requested all subjects")
+        repo = SubjectRepository()
+        subjects = repo.get_all_subjects()
+        
+        # Convert datetime to string and ensure all required fields exist
+        result = []
+        for subject in subjects:
+            # Ensure required fields exist
+            if not subject.get("subject_id") or not subject.get("subject_code") or not subject.get("subject_name"):
+                logger.warning(f"Skipping invalid subject: {subject}")
+                continue
+                
+            subject["created_at"] = str(subject.get("created_at")) if subject.get("created_at") else None
+            subject["updated_at"] = str(subject.get("updated_at")) if subject.get("updated_at") else None
+            result.append(subject)
+        
+        logger.info(f"Returning {len(result)} subjects")
+        return result
+    except Exception as e:
+        logger.error(f"Error in list_subjects: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve subjects: {str(e)}")
 
 @router.get("/{subject_id}", response_model=SubjectResponse)
 def get_subject(subject_id: str = Path(..., description="Subject ID"), user: UserInfo = Depends(get_current_user)):
