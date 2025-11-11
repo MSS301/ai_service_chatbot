@@ -3,10 +3,13 @@ from app.models.rag_model import (
     SlidesGPTRequest, SlidesGPTResponse,
     TemplateSlidesRequest, TemplateSlidesResponse
 )
-from app.core.config import SLIDES_BASE_URL, SLIDESGPT_API_KEY
+from app.core.config import SLIDES_BASE_URL, SLIDESGPT_API_KEY, OPENAI_API_KEY
 import requests, uuid, os
 from pydantic import BaseModel
 from app.repositories.content_repository import ContentRepository
+from openai import OpenAI
+import re
+import yaml
 
 router = APIRouter()
 
@@ -115,4 +118,115 @@ def create_with_template(req: TemplateSlidesRequest):
     slides.append({"type": "closing", "title": "Tổng kết", "bullets": ["Câu hỏi?", "Bài tập/vận dụng"]})
     return {"slides": slides}
 
+
+class TemplateYAMLFromContentRequest(BaseModel):
+    content_id: str
+    created_by: str | None = None
+
+
+class TemplateYAMLResponse(BaseModel):
+    yaml: str
+
+
+@router.post("/template/yaml", response_model=TemplateYAMLResponse)
+def generate_template_yaml_from_content(req: TemplateYAMLFromContentRequest):
+    """
+    Sinh YAML slide từ content_id theo schema:
+    slides: [ {layout, title, bullets: [...] } ]
+    meta: { deck_title, author }
+    """
+    crepo = ContentRepository()
+    doc = crepo.get_by_id(req.content_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="content_id not found")
+    content_text = doc.get("content_text", "")
+    if not content_text:
+        raise HTTPException(status_code=400, detail="content_text is empty for this content_id")
+    if not OPENAI_API_KEY:
+        raise HTTPException(status_code=500, detail="OPENAI_API_KEY not configured")
+
+    client = OpenAI(api_key=OPENAI_API_KEY)
+    system_msg = "Chỉ trả về YAML hợp lệ theo schema yêu cầu, không giải thích, không code block."
+    user_msg = (
+        "Chuyển nội dung sau thành YAML tạo slide theo schema:\n\n"
+        "slides:\n"
+        "  - layout: title_content\n"
+        "    title: \"Tiêu đề\"\n"
+        "    bullets:\n"
+        "      - \"Bullet 1\"\n"
+        "      - \"  - Sub-bullet\"\n"
+        "meta:\n"
+        "  deck_title: \"Bài giảng\"\n"
+        "  author: \"\"\n\n"
+        "YÊU CẦU:\n"
+        "- layout mặc định: title_content\n"
+        "- Sub-bullet bắt đầu bằng hai space + '- '\n"
+        "- Giữ tiếng Việt, rõ ràng, không dùng code block\n\n"
+        "Nội dung cần chuyển:\n"
+        f"{content_text}\n"
+    )
+    resp = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": system_msg},
+            {"role": "user", "content": user_msg},
+        ],
+        temperature=0.2,
+    )
+    yaml_text = resp.choices[0].message.content or ""
+    # Loại bỏ code fences nếu có
+    yaml_text = re.sub(r"^```[a-zA-Z]*\s*|\s*```$", "", yaml_text.strip(), flags=re.MULTILINE)
+
+    # Chuẩn hoá bullets về danh sách phẳng các chuỗi (sub-bullet dùng '  - ')
+    def flatten_bullets(node, level=0):
+        lines = []
+        if isinstance(node, list):
+            for it in node:
+                lines.extend(flatten_bullets(it, level))
+        elif isinstance(node, dict):
+            # Nếu LLM trả dict {text, children} không mong muốn -> chuyển text và duyệt children
+            text = node.get("text")
+            children = node.get("children")
+            if text is not None:
+                prefix = ("  - " * level) if level > 0 else ""
+                lines.append(f"{prefix}{str(text).strip()}")
+            if children:
+                lines.extend(flatten_bullets(children, level + 1))
+        elif isinstance(node, str):
+            s = node.strip()
+            # Giữ nguyên nếu đã có sub-bullet tiền tố
+            if level == 0:
+                lines.append(s)
+            else:
+                prefix = "  - " * level
+                # nếu đã có tiền tố, giữ nguyên
+                if re.match(r"^\s{2}-\s+", s):
+                    lines.append(s)
+                else:
+                    lines.append(f"{prefix}{s}")
+        else:
+            # Các kiểu khác -> ép thành chuỗi
+            val = str(node)
+            prefix = ("  - " * level) if level > 0 else ""
+            lines.append(f"{prefix}{val}")
+        return lines
+
+    try:
+        data = yaml.safe_load(yaml_text) or {}
+        slides = data.get("slides", [])
+        for s in slides:
+            bullets = s.get("bullets")
+            if bullets is not None:
+                s["bullets"] = flatten_bullets(bullets, level=0)
+        # Bảo toàn meta nếu có, nếu không thì thêm khung trống
+        if "meta" not in data:
+            data["meta"] = {"deck_title": "Bài giảng", "author": ""}
+        yaml_text = yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
+    except Exception:
+        # Nếu parse lỗi, vẫn lưu nguyên văn đã strip codefence
+        pass
+
+    # Lưu vào DB vào field content_yaml
+    crepo.save_content_yaml(req.content_id, yaml_text, created_by=req.created_by)
+    return {"yaml": yaml_text}
 

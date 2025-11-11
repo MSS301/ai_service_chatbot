@@ -105,4 +105,42 @@ class ContentRepository:
         res = self.collection.update_one({"content_id": content_id}, update_doc)
         return res.modified_count > 0
 
+    def save_template_yaml(self, content_id: str, yaml_text: str, created_by: Optional[str] = None) -> bool:
+        """
+        Save generated slide YAML into 'template_yaml' field and push a record into 'templates' history.
+        """
+        now = datetime.now(timezone.utc)
+        record: Dict[str, Any] = {
+            "yaml": yaml_text,
+            "created_by": created_by,
+            "created_at": now,
+        }
+        res = self.collection.update_one(
+            {"content_id": content_id},
+            {
+                "$set": {"template_yaml": yaml_text, "updated_at": now},
+                "$push": {"templates": record},
+            }
+        )
+        return res.modified_count > 0
+
+    def save_content_yaml(self, content_id: str, yaml_text: str, created_by: Optional[str] = None) -> bool:
+        """
+        Save generated YAML into 'content_yaml' field and push to 'templates' history as well.
+        """
+        now = datetime.now(timezone.utc)
+        record: Dict[str, Any] = {
+            "yaml": yaml_text,
+            "created_by": created_by,
+            "created_at": now,
+        }
+        res = self.collection.update_one(
+            {"content_id": content_id},
+            {
+                "$set": {"content_yaml": yaml_text, "updated_at": now},
+                "$push": {"templates": record},
+            }
+        )
+        return res.modified_count > 0
+
 
