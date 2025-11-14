@@ -1,5 +1,5 @@
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+# from fastapi.middleware.cors import CORSMiddleware  # CORS handled by API Gateway
 from fastapi.openapi.utils import get_openapi
 from contextlib import asynccontextmanager
 from .api import ingest, rag, books, chapters, lessons, grades, subjects, slides
@@ -56,21 +56,18 @@ app = FastAPI(
 )
 
 # CORS Configuration
-# Allow requests from API Gateway (localhost:8080) and other common origins
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "http://localhost:8080",  # API Gateway
-        "http://127.0.0.1:8080",  # API Gateway (alternative)
-        "http://localhost:3000",  # Frontend (if applicable)
-        "http://localhost:5173",  # Vite dev server (if applicable)
-        "*"  # Allow all origins in development (remove in production)
-    ],
-    allow_credentials=True,
-    allow_methods=["*"],  # Allow all HTTP methods
-    allow_headers=["*"],  # Allow all headers (including Authorization, X-User-Id, etc.)
-    expose_headers=["*"],  # Expose all headers in response
-)
+# Note: CORS is handled by API Gateway (CorsWebFilter)
+# AI Chatbot Service should only be accessed through API Gateway, not directly from browser
+# Therefore, CORS middleware is removed to avoid duplicate CORS headers
+# If you need to access this service directly (e.g., for testing), uncomment below:
+# app.add_middleware(
+#     CORSMiddleware,
+#     allow_origins=["*"],
+#     allow_credentials=True,
+#     allow_methods=["*"],
+#     allow_headers=["*"],
+#     expose_headers=["*"],
+# )
 
 app.include_router(ingest.router, prefix="/ai_service/ingestion", tags=["Ingestion"])
 app.include_router(rag.router, prefix="/ai_service/rag", tags=["RAG Query"])

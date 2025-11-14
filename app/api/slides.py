@@ -101,7 +101,9 @@ def create_with_slidesgpt_from_content(req: SlidesGPTFromContentRequest, user: U
             "download": data.get("download"),
         }
         # Save to DB under this content_id
-        crepo.save_slidesgpt(req.content_id, resp, created_by=req.created_by)
+        # Use user.user_id if created_by is not provided in request
+        created_by = req.created_by or user.user_id
+        crepo.save_slidesgpt(req.content_id, resp, created_by=created_by)
         return resp
     except requests.RequestException as e:
         raise HTTPException(status_code=502, detail=f"SlidesGPT request failed: {e}")
@@ -383,6 +385,161 @@ def download_template(template_id: str, user: UserInfo = Depends(get_current_use
     return Response(content=data, media_type=meta.get("content_type", "application/vnd.openxmlformats-officedocument.presentationml.presentation"), headers=headers)
 
 
+@router.get("/templates/{template_id}/preview")
+def preview_template(template_id: str, user: UserInfo = Depends(get_current_user)):
+    """
+    Trả về preview image của slide đầu tiên trong template.
+    """
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+        import io
+    except ImportError:
+        raise HTTPException(status_code=500, detail="PIL (Pillow) is required for preview generation")
+    
+    trepo = SlideTemplateRepository()
+    meta = trepo.get_template_by_id(template_id)
+    if not meta:
+        raise HTTPException(status_code=404, detail="template_id not found")
+    data = trepo.download_template_file(template_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail="template file not found")
+    
+    try:
+        # Load PPTX
+        prs = Presentation(BytesIO(data))
+        if len(prs.slides) == 0:
+            raise HTTPException(status_code=400, detail="Template has no slides")
+        
+        # Get first slide
+        slide = prs.slides[0]
+        
+        # Create preview image from slide content
+        width, height = 1280, 720  # 16:9 aspect ratio
+        img = Image.new('RGB', (width, height), color='#ffffff')
+        draw = ImageDraw.Draw(img)
+        
+        # Try to get fonts
+        try:
+            # Try common font paths
+            font_paths = [
+                "C:/Windows/Fonts/arial.ttf",
+                "C:/Windows/Fonts/calibri.ttf",
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+                "/System/Library/Fonts/Helvetica.ttc"
+            ]
+            font_title = None
+            font_text = None
+            for path in font_paths:
+                try:
+                    if os.path.exists(path):
+                        font_title = ImageFont.truetype(path, 56)
+                        font_text = ImageFont.truetype(path, 28)
+                        break
+                except:
+                    continue
+            if font_title is None:
+                font_title = ImageFont.load_default()
+                font_text = ImageFont.load_default()
+        except:
+            font_title = ImageFont.load_default()
+            font_text = ImageFont.load_default()
+        
+        # Draw background gradient (simple)
+        for i in range(height):
+            r = int(255 - (i / height) * 20)
+            g = int(255 - (i / height) * 20)
+            b = int(255 - (i / height) * 20)
+            draw.line([(0, i), (width, i)], fill=(r, g, b))
+        
+        y_pos = 80
+        title_found = False
+        
+        # Extract text from slide shapes, prioritize title placeholders
+        shapes_with_text = []
+        for shape in slide.shapes:
+            if hasattr(shape, "text") and shape.text:
+                text = shape.text.strip()
+                if text:
+                    # Check if it's a title placeholder
+                    is_title = False
+                    if hasattr(shape, "placeholder_format"):
+                        try:
+                            ph_type = shape.placeholder_format.type
+                            if ph_type in (PP_PLACEHOLDER.TITLE, PP_PLACEHOLDER.CENTER_TITLE):
+                                is_title = True
+                        except:
+                            pass
+                    # Also check position (top 30% of slide)
+                    if not is_title and hasattr(shape, "top"):
+                        if shape.top < height * 0.3:
+                            is_title = True
+                    
+                    shapes_with_text.append((text, is_title, shape.top if hasattr(shape, "top") else y_pos))
+        
+        # Sort: titles first, then by position
+        shapes_with_text.sort(key=lambda x: (not x[1], x[2]))
+        
+        # Draw text
+        for text, is_title, _ in shapes_with_text:
+            if y_pos > height - 100:
+                break
+            
+            font = font_title if is_title and not title_found else font_text
+            color = '#1f2937' if is_title and not title_found else '#4b5563'
+            
+            # Word wrap
+            words = text.split()
+            lines = []
+            current_line = []
+            max_width = width - 100
+            
+            for word in words:
+                test_line = ' '.join(current_line + [word])
+                bbox = draw.textbbox((0, 0), test_line, font=font)
+                text_width = bbox[2] - bbox[0]
+                
+                if text_width <= max_width:
+                    current_line.append(word)
+                else:
+                    if current_line:
+                        lines.append(' '.join(current_line))
+                    current_line = [word]
+            
+            if current_line:
+                lines.append(' '.join(current_line))
+            
+            # Draw lines
+            for line in lines:
+                if y_pos > height - 100:
+                    break
+                draw.text((50, y_pos), line, fill=color, font=font)
+                y_pos += (80 if is_title and not title_found else 50)
+            
+            if is_title and not title_found:
+                title_found = True
+                y_pos += 20  # Extra space after title
+        
+        # If no text found, show template name
+        if y_pos == 80:
+            draw.text((50, 80), meta.get("name", "Template Preview"), fill='#1f2937', font=font_title)
+            draw.text((50, 180), "Slide 1 - Template", fill='#6b7280', font=font_text)
+        
+        # Add border
+        draw.rectangle([(10, 10), (width - 10, height - 10)], outline='#e5e7eb', width=2)
+        
+        # Convert to bytes
+        img_bytes = BytesIO()
+        img.save(img_bytes, format='PNG', optimize=True)
+        img_bytes.seek(0)
+        
+        return Response(content=img_bytes.read(), media_type="image/png")
+    except Exception as e:
+        logger.error(f"Error generating preview: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Failed to generate preview: {str(e)}")
+
+
 @router.delete("/templates/{template_id}")
 def delete_template(template_id: str, user: UserInfo = Depends(get_current_user)):
     trepo = SlideTemplateRepository()
@@ -390,6 +547,93 @@ def delete_template(template_id: str, user: UserInfo = Depends(get_current_user)
     if not ok:
         raise HTTPException(status_code=404, detail="template_id not found")
     return {"status": "deleted", "template_id": template_id}
+
+
+# ===================== List User's Generated Slides =====================
+
+class SlideListItem(BaseModel):
+    content_id: str
+    content_text: str | None = None
+    grade_id: str | None = None
+    book_id: str | None = None
+    chapter_id: str | None = None
+    lesson_id: str | None = None
+    subject_id: str | None = None
+    slidesgpt: Dict[str, Any] | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+class SlidesListResponse(BaseModel):
+    slides: List[SlideListItem]
+    total: int
+    limit: int
+    skip: int
+
+
+@router.get("/my", response_model=SlidesListResponse)
+def list_my_slides(
+    limit: int = 20,
+    skip: int = 0,
+    user: UserInfo = Depends(get_current_user)
+):
+    """
+    Lấy danh sách slides đã gen của user hiện tại.
+    """
+    try:
+        crepo = ContentRepository()
+        
+        logger.info(f"Listing slides for user: {user.user_id}, limit: {limit}, skip: {skip}")
+        
+        # Get slides
+        docs = crepo.list_slides_by_user(user.user_id, limit=limit, skip=skip)
+        total = crepo.count_slides_by_user(user.user_id)
+        
+        logger.info(f"Found {len(docs)} slides, total: {total}")
+        
+        # Convert datetime to str and format response
+        slides = []
+        for doc in docs:
+            try:
+                slide_item: Dict[str, Any] = {
+                    "content_id": doc.get("content_id", ""),
+                    "content_text": doc.get("content_text"),
+                    "grade_id": doc.get("grade_id"),
+                    "book_id": doc.get("book_id"),
+                    "chapter_id": doc.get("chapter_id"),
+                    "lesson_id": doc.get("lesson_id"),
+                    "subject_id": doc.get("subject_id"),
+                    "slidesgpt": doc.get("slidesgpt"),
+                }
+                
+                # Convert datetime fields
+                for k in ("created_at", "updated_at"):
+                    if doc.get(k):
+                        if isinstance(doc[k], str):
+                            slide_item[k] = doc[k]
+                        else:
+                            slide_item[k] = str(doc[k])
+                
+                # Also convert slidesgpt.created_at if exists
+                if slide_item.get("slidesgpt") and isinstance(slide_item["slidesgpt"], dict):
+                    if slide_item["slidesgpt"].get("created_at"):
+                        if not isinstance(slide_item["slidesgpt"]["created_at"], str):
+                            slide_item["slidesgpt"]["created_at"] = str(slide_item["slidesgpt"]["created_at"])
+                
+                slides.append(slide_item)
+            except Exception as e:
+                logger.error(f"Error processing slide doc: {e}, doc: {doc.get('content_id', 'unknown')}")
+                continue
+        
+        return {
+            "slides": slides,
+            "total": total,
+            "limit": limit,
+            "skip": skip,
+        }
+    except Exception as e:
+        logger.error(f"Error listing slides for user {user.user_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to list slides: {str(e)}")
 
 
 # ===================== Template Inspection =====================
@@ -466,6 +710,7 @@ class ExportPPTXRequest(BaseModel):
 def export_pptx(req: ExportPPTXRequest, user: UserInfo = Depends(get_current_user)):
     """
     Tạo file PPTX từ content_yaml_id và template_id lưu trong DB.
+    Sau khi tạo thành công, lưu thông tin slide vào database để user có thể xem lại.
     """
     # Load YAML
     crepo = ContentRepository()
@@ -473,6 +718,7 @@ def export_pptx(req: ExportPPTXRequest, user: UserInfo = Depends(get_current_use
     if not yaml_doc:
         raise HTTPException(status_code=404, detail="content_yaml_id not found")
     yaml_text = yaml_doc.get("yaml", "")
+    content_id = yaml_doc.get("content_id")  # Get content_id from yaml_doc
     if not yaml_text:
         raise HTTPException(status_code=400, detail="YAML is empty for this content_yaml_id")
 
@@ -860,6 +1106,28 @@ def export_pptx(req: ExportPPTXRequest, user: UserInfo = Depends(get_current_use
     out = BytesIO()
     prs.save(out)
     out.seek(0)
+    pptx_data = out.read()
+    out.seek(0)
+
+    # Lưu thông tin slide vào database để user có thể xem lại
+    if content_id:
+        try:
+            # Tạo download link endpoint
+            download_url = f"/ai_service/slides/template/export/download?content_yaml_id={req.content_yaml_id}&template_id={req.template_id}"
+            # Lưu thông tin về slide đã export từ template
+            slides_info = {
+                "id": f"template_export_{req.content_yaml_id}",
+                "type": "template_export",
+                "content_yaml_id": req.content_yaml_id,
+                "template_id": req.template_id,
+                "filename": req.filename or f"slides_{req.content_yaml_id}.pptx",
+                "download": download_url,  # Lưu download link
+            }
+            crepo.save_slidesgpt(content_id, slides_info, created_by=user.user_id)
+            logger.info(f"Saved template export slide info for content_id: {content_id}, user: {user.user_id}")
+        except Exception as e:
+            logger.error(f"Failed to save slide info to database: {e}", exc_info=True)
+            # Không fail request nếu lưu DB thất bại, vẫn trả về file
 
     # Tên file: đảm bảo có đuôi .pptx và header theo RFC 5987 để hỗ trợ Unicode
     filename = req.filename or f"slides_{req.content_yaml_id}.pptx"
@@ -875,8 +1143,29 @@ def export_pptx(req: ExportPPTXRequest, user: UserInfo = Depends(get_current_use
         content_disp = f'attachment; filename="{ascii_fallback}"; filename*=UTF-8\'\'{quote(filename)}'
     headers = {"Content-Disposition": content_disp}
     return Response(
-        content=out.read(),
+        content=pptx_data,
         media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
         headers=headers,
     )
+
+
+@router.get("/template/export/download")
+def download_exported_pptx(
+    content_yaml_id: str,
+    template_id: str,
+    user: UserInfo = Depends(get_current_user)
+):
+    """
+    Download lại PPTX đã export từ content_yaml_id và template_id.
+    Endpoint này được dùng để download lại file đã tạo trước đó.
+    Logic giống như export_pptx nhưng chỉ trả về file.
+    """
+    # Tạo request object giống như export
+    req = ExportPPTXRequest(
+        content_yaml_id=content_yaml_id,
+        template_id=template_id,
+        overwrite_existing=True
+    )
+    # Gọi lại logic export (nhưng không lưu lại vào DB)
+    return export_pptx(req, user)
 
