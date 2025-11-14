@@ -462,19 +462,23 @@ def preview_template(template_id: str, user: UserInfo = Depends(get_current_user
                 if text:
                     # Check if it's a title placeholder
                     is_title = False
-                    if hasattr(shape, "placeholder_format"):
-                        try:
-                            ph_type = shape.placeholder_format.type
-                            if ph_type in (PP_PLACEHOLDER.TITLE, PP_PLACEHOLDER.CENTER_TITLE):
-                                is_title = True
-                        except:
-                            pass
-                    # Also check position (top 30% of slide)
+                    # Check if shape is a placeholder first
+                    try:
+                        if hasattr(shape, "is_placeholder") and shape.is_placeholder:
+                            if hasattr(shape, "placeholder_format"):
+                                ph_type = shape.placeholder_format.type
+                                if ph_type in (PP_PLACEHOLDER.TITLE, PP_PLACEHOLDER.CENTER_TITLE):
+                                    is_title = True
+                    except (AttributeError, TypeError):
+                        # Shape is not a placeholder or doesn't have placeholder_format
+                        pass
+                    # Also check position (top 30% of slide) as fallback
                     if not is_title and hasattr(shape, "top"):
                         if shape.top < height * 0.3:
                             is_title = True
                     
-                    shapes_with_text.append((text, is_title, shape.top if hasattr(shape, "top") else y_pos))
+                    shape_top = shape.top if hasattr(shape, "top") else y_pos
+                    shapes_with_text.append((text, is_title, shape_top))
         
         # Sort: titles first, then by position
         shapes_with_text.sort(key=lambda x: (not x[1], x[2]))
